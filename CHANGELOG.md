@@ -1,3 +1,12 @@
+## v0.9.0 (2026-09-09)
+
+* fix(release): pass a tag message so signed tags work non-interactively (2431a44)
+* chore(demo): show a running dev server with its port in the README GIF (1aab9c4)
+* chore(plugin): widen popup to 55% (9417f8f)
+* feat(tui): list running processes with their ports under each space (19b451d)
+* chore(demo): record the README GIF with herdr-demokit (8e2b9d4)
+* docs: document popup size overrides and post-release install flow in CLAUDE.md (9a944b1)
+
 ## v0.8.0 (2026-07-28)
 
 * docs: sync behaviour section with current sorting and PR prefixes (7c447d7)
