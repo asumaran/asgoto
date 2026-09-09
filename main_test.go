@@ -165,33 +165,41 @@ func TestShortCmd(t *testing.T) {
 
 func TestProcLabel(t *testing.T) {
 	mk := func(shell, group int, procs ...struct {
-		pid  int
-		argv []string
+		pid   int
+		argv0 string
+		argv  []string
 	}) procInfoResp {
 		var r procInfoResp
 		r.Result.ProcessInfo.ShellPID = shell
 		r.Result.ProcessInfo.GroupID = group
 		for _, p := range procs {
 			r.Result.ProcessInfo.Processes = append(r.Result.ProcessInfo.Processes, struct {
-				PID  int      `json:"pid"`
-				Name string   `json:"name"`
-				Argv []string `json:"argv"`
-			}{PID: p.pid, Name: "x", Argv: p.argv})
+				PID   int      `json:"pid"`
+				Name  string   `json:"name"`
+				Argv0 string   `json:"argv0"`
+				Argv  []string `json:"argv"`
+			}{PID: p.pid, Name: "node", Argv0: p.argv0, Argv: p.argv})
 		}
 		return r
 	}
 	type proc = struct {
-		pid  int
-		argv []string
+		pid   int
+		argv0 string
+		argv  []string
 	}
 	// Shell at its prompt: the group leader is the shell itself.
-	if got := procLabel(mk(10, 10, proc{10, []string{"-zsh"}})); got != "" {
+	if got := procLabel(mk(10, 10, proc{10, "zsh", []string{"-zsh"}})); got != "" {
 		t.Errorf("prompt: got %q, want empty", got)
 	}
 	// Foreground job: the leader is the pane's command, its children are noise.
-	r := mk(10, 20, proc{25, []string{"caffeinate", "-i"}}, proc{20, []string{"sleep", "600"}})
+	r := mk(10, 20, proc{25, "caffeinate", []string{"caffeinate", "-i"}}, proc{20, "sleep", []string{"sleep", "600"}})
 	if got := procLabel(r); got != "sleep 600" {
 		t.Errorf("job: got %q, want %q", got, "sleep 600")
+	}
+	// argv unreadable: argv0 beats the bare executable name.
+	r = mk(10, 30, proc{30, "npm exec foo@latest", nil})
+	if got := procLabel(r); got != "npm exec foo@latest" {
+		t.Errorf("no argv: got %q, want argv0", got)
 	}
 }
 

@@ -308,9 +308,10 @@ type procInfoResp struct {
 			ShellPID  int `json:"shell_pid"`
 			GroupID   int `json:"foreground_process_group_id"`
 			Processes []struct {
-				PID  int      `json:"pid"`
-				Name string   `json:"name"`
-				Argv []string `json:"argv"`
+				PID   int      `json:"pid"`
+				Name  string   `json:"name"`
+				Argv0 string   `json:"argv0"`
+				Argv  []string `json:"argv"`
 			} `json:"foreground_processes"`
 		} `json:"process_info"`
 	} `json:"result"`
@@ -331,6 +332,12 @@ func procLabel(r procInfoResp) string {
 		}
 		if len(p.Argv) > 0 {
 			return shortCmd(p.Argv)
+		}
+		// herdr cannot always read a process's argv; its argv0 is then the
+		// most descriptive text it has ("npm exec foo@latest"), name is just
+		// the executable ("node").
+		if p.Argv0 != "" {
+			return p.Argv0
 		}
 		return p.Name
 	}
