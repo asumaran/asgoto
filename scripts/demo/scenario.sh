@@ -8,7 +8,7 @@ DEMO_OUT="docs/demo.gif"
 # The initial workspace is the linked plugin's checkout, so the demo starts on
 # "herdr-goto main" whatever directory the recording runs from.
 DEMO_START_CWD="$HOME/Developer/herdr-goto"
-# The demo popup opens bigger than the manifest's 45% x 50% so it reads well
+# The demo popup opens bigger than the manifest's 55% x 50% so it reads well
 # in the GIF; open-pane.sh picks these up from the session server's env.
 DEMO_SESSION_ENV=(GOTO_POPUP_WIDTH=60% GOTO_POPUP_HEIGHT=60%)
 
@@ -34,6 +34,14 @@ SPLITS=(
   "$HOME/wt/shopnest/test-format-price-util"
   "$HOME/Developer/asdev"
 )
+# The shopnest worktree split runs a dev server so the popup lists it as a
+# process row with its listening port. Needs node_modules in that worktree
+# and the port free (pinned off 3000/3001, usually taken by real dev
+# servers on this machine; next would otherwise silently pick another port
+# and the wait below would never see it).
+DEV_SERVER_CWD="$HOME/wt/shopnest/test-format-price-util"
+DEV_SERVER_PORT=3002
+DEV_SERVER_CMD="npm run dev -- --port $DEV_SERVER_PORT"
 
 # Build ./goto stamped with the manifest version so the popup prompt shows the
 # release look ("goto ❯", no "(dev)" marker). demo_teardown restores the plain
@@ -49,10 +57,22 @@ demo_teardown() {
 }
 
 demo_setup() {
-  local repo pair target
+  local repo pair target pane dev_pane="" i
   # The launch workspace exists but has no worktree metadata yet; adopt it.
   demo_adopt_repo "$(demo_first_workspace)" "$DEMO_START_CWD"
   for repo in "${REPOS[@]}"; do demo_open_repo "$repo" >/dev/null; done
   for pair in "${WORKTREES[@]}"; do demo_open_worktree "${pair%%:*}" "${pair#*:}"; done
-  for target in "${SPLITS[@]}"; do demo_split_below "$target" >/dev/null; done
+  for target in "${SPLITS[@]}"; do
+    pane="$(demo_split_below "$target")"
+    [[ "$target" == "$DEV_SERVER_CWD" ]] && dev_pane="$pane"
+  done
+
+  lsof -nP -iTCP:"$DEV_SERVER_PORT" -sTCP:LISTEN >/dev/null 2>&1 &&
+    die "port $DEV_SERVER_PORT is already taken; the demo dev server needs it"
+  demo_run_in_pane "$dev_pane" "$DEV_SERVER_CMD"
+  for i in $(seq 1 60); do
+    lsof -nP -iTCP:"$DEV_SERVER_PORT" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  die "dev server never bound port $DEV_SERVER_PORT"
 }
