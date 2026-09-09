@@ -104,7 +104,9 @@ sed -i '' -E "s/^version = \".*\"/version = \"${VERSION}\"/" herdr-plugin.toml
 # --- apply ------------------------------------------------------------------
 git add CHANGELOG.md herdr-plugin.toml
 git commit -m "chore(release): ${tag}"
-git tag "$tag"
+# -m so the tag works non-interactively when tag.gpgsign forces an annotated
+# (signed) tag, which requires a message.
+git tag -m "$tag" "$tag"
 
 if $DO_PUSH; then
   git push origin HEAD
