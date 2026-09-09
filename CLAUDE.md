@@ -61,7 +61,7 @@ go vet ./... && go test ./...
 ## How it's wired into herdr
 
 The plugin requires herdr >= 0.7.5. The manifest declares the `goto` popup
-pane (45% x 50%) and the `open` action; herdr has no `plugin_pane` keybind
+pane (55% x 50%) and the `open` action; herdr has no `plugin_pane` keybind
 type, so the key binds the action, which runs `scripts/open-pane.sh` ->
 `herdr plugin pane open`:
 
