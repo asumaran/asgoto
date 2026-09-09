@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -46,6 +47,7 @@ type wsInfo struct {
 	ID       string    `json:"workspace_id"`
 	Label    string    `json:"label"`
 	Number   int       `json:"number"`
+	Focused  bool      `json:"focused"` // the workspace goto was opened from
 	Worktree *worktree `json:"worktree"`
 }
 
@@ -80,10 +82,13 @@ type node struct {
 	pr       *prRef // PR for this branch, annotated from cache/gh; nil until known or when none
 	tktW     int    // ticket column width within the sibling group (0 = no prefix)
 	prW      int    // "#123" column width within the sibling group (0 = no PR column)
-	path     string // breadcrumb, e.g. "monorepo-front › infra-metrics"
 	wsID     string // workspace to focus (repo/worktree, and a pane's workspace)
 	paneID   string // pane to focus
 	status   string // aggregated agent status (see statusDot); drives the gutter dot
+	hasAgent bool   // pane hosts a herdr-recognized agent (its process is implied by the leaf/dot)
+	proc     string // pane only: foreground command running in it; such panes are always listed, labelled by the command
+	pids     []int  // pane only: pids of the foreground process group, for the ports lookup
+	ports    []int  // pane only: TCP ports its process tree listens on; right-aligned
 	expanded bool
 	children []*node
 }
@@ -293,6 +298,325 @@ func annotatePRs(nodes []*node, byBranch map[string]prRef) {
 			n.ticket = p.Ticket
 		}
 	}
+}
+
+// ---- foreground processes (herdr pane process-info) ----
+
+type procInfoResp struct {
+	Result struct {
+		ProcessInfo struct {
+			ShellPID  int `json:"shell_pid"`
+			GroupID   int `json:"foreground_process_group_id"`
+			Processes []struct {
+				PID  int      `json:"pid"`
+				Name string   `json:"name"`
+				Argv []string `json:"argv"`
+			} `json:"foreground_processes"`
+		} `json:"process_info"`
+	} `json:"result"`
+}
+
+// procLabel is the short command a pane is running in the foreground, or ""
+// when the shell sits at its prompt (the group leader is the shell itself).
+// The leader is the process whose pid equals the foreground process group id;
+// its children (MCP servers, caffeinate, ...) are noise for a one-line label.
+func procLabel(r procInfoResp) string {
+	pi := r.Result.ProcessInfo
+	if pi.GroupID == 0 || pi.GroupID == pi.ShellPID {
+		return ""
+	}
+	for _, p := range pi.Processes {
+		if p.PID != pi.GroupID {
+			continue
+		}
+		if len(p.Argv) > 0 {
+			return shortCmd(p.Argv)
+		}
+		return p.Name
+	}
+	return ""
+}
+
+// interpreters whose first non-flag argument is the script that matters
+// ("node /path/pnpm dev" -> "pnpm dev").
+var interpreters = map[string]bool{
+	"node": true, "python": true, "python3": true, "ruby": true, "perl": true,
+	"sh": true, "bash": true, "zsh": true, "bun": true, "deno": true,
+}
+
+// shortCmd compresses an argv into a readable label: paths are reduced to
+// their basename and a leading interpreter is dropped when it runs a script.
+func shortCmd(argv []string) string {
+	parts := make([]string, 0, len(argv))
+	for _, a := range argv {
+		if strings.Contains(a, "/") && !strings.HasPrefix(a, "-") {
+			a = filepath.Base(a)
+		}
+		parts = append(parts, a)
+	}
+	if len(parts) > 1 && interpreters[parts[0]] && !strings.HasPrefix(parts[1], "-") {
+		parts = parts[1:]
+	}
+	return strings.Join(parts, " ")
+}
+
+// procPIDs lists every pid in the pane's foreground process group (leader and
+// children); listeners are looked up among these and their descendants.
+func procPIDs(r procInfoResp) []int {
+	pi := r.Result.ProcessInfo
+	if pi.GroupID == 0 || pi.GroupID == pi.ShellPID {
+		return nil
+	}
+	pids := make([]int, 0, len(pi.Processes))
+	for _, p := range pi.Processes {
+		pids = append(pids, p.PID)
+	}
+	return pids
+}
+
+// listeningPorts maps pid -> TCP ports in LISTEN state, from one
+// `lsof -nP -iTCP -sTCP:LISTEN -Fpn` call (no root needed for own processes).
+func listeningPorts(ctx context.Context) map[int][]int {
+	out, err := exec.CommandContext(ctx, "lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn").Output()
+	if err != nil && len(out) == 0 {
+		return nil
+	}
+	return parseLsof(string(out))
+}
+
+// processParents maps pid -> ppid for every process, from one `ps -axo pid,ppid`.
+// Dev servers often detach into their own process group (`pnpm nx dev` ->
+// next-server), so the pane's foreground group alone would miss the listener;
+// walking descendants finds it.
+func processParents(ctx context.Context) map[int]int {
+	out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=").Output()
+	if err != nil && len(out) == 0 {
+		return nil
+	}
+	return parsePS(string(out))
+}
+
+func parsePS(out string) map[int]int {
+	parents := map[int]int{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		ppid, err2 := strconv.Atoi(f[1])
+		if err1 == nil && err2 == nil {
+			parents[pid] = ppid
+		}
+	}
+	return parents
+}
+
+// descendants returns roots plus every process below them, per parents.
+func descendants(roots []int, parents map[int]int) []int {
+	children := map[int][]int{}
+	for pid, ppid := range parents {
+		children[ppid] = append(children[ppid], pid)
+	}
+	seen := map[int]bool{}
+	var out []int
+	var walk func(pid int)
+	walk = func(pid int) {
+		if seen[pid] {
+			return
+		}
+		seen[pid] = true
+		out = append(out, pid)
+		for _, c := range children[pid] {
+			walk(c)
+		}
+	}
+	for _, r := range roots {
+		walk(r)
+	}
+	return out
+}
+
+// parseLsof reads lsof -F output: "p<pid>" starts a process, "n<addr>:<port>"
+// lists one socket. Ports are deduped per pid (IPv4 + IPv6 listeners).
+func parseLsof(out string) map[int][]int {
+	byPID := map[int][]int{}
+	pid := 0
+	seen := map[int]map[int]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) < 2 {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			pid, _ = strconv.Atoi(line[1:])
+		case 'n':
+			i := strings.LastIndex(line, ":")
+			if i < 0 || pid == 0 {
+				continue
+			}
+			port, err := strconv.Atoi(line[i+1:])
+			if err != nil {
+				continue
+			}
+			if seen[pid] == nil {
+				seen[pid] = map[int]bool{}
+			}
+			if !seen[pid][port] {
+				seen[pid][port] = true
+				byPID[pid] = append(byPID[pid], port)
+			}
+		}
+	}
+	return byPID
+}
+
+// procEntry is what one pane is running: the foreground command and the pids
+// of its process group (ports are resolved later against these).
+type procEntry struct {
+	label string
+	pids  []int
+}
+
+// fetchProcInfos queries `pane process-info` for every pane in parallel. It
+// runs before the first paint (a few ms over the herdr socket) so process
+// rows are in place from the start instead of pushing the list around when
+// they arrive. A missing command (older herdr) or a timeout degrades to no
+// process rows at all.
+func fetchProcInfos(paneIDs []string) map[string]procEntry {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	infos := make([]procInfoResp, len(paneIDs))
+	var wg sync.WaitGroup
+	for i, id := range paneIDs {
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			out, err := exec.CommandContext(ctx, herdrBin(), "pane", "process-info", "--pane", id).Output()
+			if err != nil {
+				return
+			}
+			json.Unmarshal(out, &infos[i])
+		}(i, id)
+	}
+	wg.Wait()
+	byPane := make(map[string]procEntry, len(paneIDs))
+	for i, id := range paneIDs {
+		e := procEntry{label: procLabel(infos[i])}
+		if e.label != "" {
+			e.pids = procPIDs(infos[i])
+		}
+		byPane[id] = e
+	}
+	return byPane
+}
+
+// annotateProcs turns each pane running a foreground command into a process
+// row: its label becomes the command and it stays listed even while plain
+// panes are hidden. Agent panes are skipped: the agent is already conveyed by
+// the leaf text and the status dot.
+func annotateProcs(roots []*node, byPane map[string]procEntry) {
+	var walk func(n *node)
+	walk = func(n *node) {
+		if n.kind == "pane" {
+			n.proc, n.pids, n.ports = "", nil, nil
+			if e := byPane[n.paneID]; !n.hasAgent && e.label != "" {
+				n.proc, n.pids = e.label, e.pids
+				n.label = e.label
+			}
+			return
+		}
+		for _, c := range n.children {
+			walk(c)
+		}
+	}
+	for _, r := range roots {
+		walk(r)
+	}
+}
+
+type portsMsg struct {
+	byPane map[string][]int // pane id -> sorted listening ports
+}
+
+// fetchPortsCmd resolves listening ports for the process rows: one lsof
+// (~80ms, the expensive part, hence async after the first paint) and one ps
+// for the process tree, matched against each row's pids and their
+// descendants. Ports only fill the right column, so their late arrival never
+// shifts rows.
+func fetchPortsCmd(procNodes []*node) tea.Cmd {
+	pids := fetchPortsCmdPids(procNodes)
+	return func() tea.Msg {
+		return portsMsg{byPane: fetchPorts(pids)}
+	}
+}
+
+func fetchPorts(pidsByPane map[string][]int) map[string][]int {
+	if len(pidsByPane) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var ports map[int][]int
+	var parents map[int]int
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		ports = listeningPorts(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		parents = processParents(ctx)
+	}()
+	wg.Wait()
+	byPane := make(map[string][]int, len(pidsByPane))
+	for id, pids := range pidsByPane {
+		var out []int
+		for _, pid := range descendants(pids, parents) {
+			out = append(out, ports[pid]...)
+		}
+		sort.Ints(out)
+		byPane[id] = out
+	}
+	return byPane
+}
+
+// fetchPortsCmdPids is the pane -> pids map fetchPorts takes, for the
+// synchronous -dump path.
+func fetchPortsCmdPids(procNodes []*node) map[string][]int {
+	pids := make(map[string][]int, len(procNodes))
+	for _, n := range procNodes {
+		pids[n.paneID] = n.pids
+	}
+	return pids
+}
+
+// annotatePorts stamps listening ports on process rows.
+func annotatePorts(procNodes []*node, byPane map[string][]int) {
+	for _, n := range procNodes {
+		n.ports = byPane[n.paneID]
+	}
+}
+
+// procRows lists the pane nodes that became process rows.
+func procRows(nodes []*node) []*node {
+	var out []*node
+	for _, n := range nodes {
+		if n.kind == "pane" && n.proc != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// portsText renders a node's listening ports as ":4200 :4201" ("" when none).
+func portsText(n *node) string {
+	parts := make([]string, 0, len(n.ports))
+	for _, p := range n.ports {
+		parts = append(parts, ":"+strconv.Itoa(p))
+	}
+	return strings.Join(parts, " ")
 }
 
 func loadJSON(args []string, out any) error {
@@ -513,13 +837,14 @@ func buildTree(wss []wsInfo, panes []paneInfo) []*node {
 		byWs[p.WsID] = append(byWs[p.WsID], p)
 	}
 
-	paneNodes := func(wsID, parentPath string) []*node {
+	paneNodes := func(wsID string) []*node {
 		var out []*node
 		for _, p := range byWs[wsID] {
 			leaf := paneLeaf(p)
 			out = append(out, &node{
-				kind: "pane", label: leaf, path: parentPath + " › " + leaf,
-				wsID: wsID, paneID: p.ID, status: paneStatus(p), expanded: true,
+				kind: "pane", label: leaf,
+				wsID: wsID, paneID: p.ID, status: paneStatus(p), hasAgent: p.Agent != "",
+				expanded: true,
 			})
 		}
 		return out
@@ -597,13 +922,13 @@ func buildTree(wss []wsInfo, panes []paneInfo) []*node {
 			main = g.wss[0]
 		}
 		name := repoName(main)
-		repo := &node{kind: "repo", label: name, path: name, wsID: main.ID, expanded: true}
+		repo := &node{kind: "repo", label: name, wsID: main.ID, expanded: true}
 		if main.Worktree != nil {
 			repo.branch = gitBranch(main.Worktree.CheckoutPath)
 			repo.ticket = ticketFrom(repo.branch)
 			repo.ghSlug = slugFor(main.Worktree.RepoRoot)
 		}
-		repo.children = append(repo.children, paneNodes(main.ID, name)...)
+		repo.children = append(repo.children, paneNodes(main.ID)...)
 
 		others := []wsInfo{}
 		for _, ws := range g.wss {
@@ -634,17 +959,13 @@ func buildTree(wss []wsInfo, panes []paneInfo) []*node {
 			others[i] = w.ws
 		}
 		for _, ws := range others {
-			crumb := name + " › " + ws.Label
-			wt := &node{kind: "worktree", label: ws.Label, path: crumb, wsID: ws.ID, expanded: true}
+			wt := &node{kind: "worktree", label: ws.Label, wsID: ws.ID, expanded: true}
 			if ws.Worktree != nil {
 				wt.branch = gitBranch(ws.Worktree.CheckoutPath)
 				wt.ticket = ticketFrom(wt.branch, ws.Label)
 				wt.ghSlug = slugFor(ws.Worktree.RepoRoot)
-				if wt.branch != "" && wt.branch != ws.Label {
-					wt.path = crumb + "  (" + wt.branch + ")"
-				}
 			}
-			wt.children = paneNodes(ws.ID, crumb)
+			wt.children = paneNodes(ws.ID)
 			repo.children = append(repo.children, wt)
 		}
 		roots = append(roots, repo)
@@ -653,6 +974,23 @@ func buildTree(wss []wsInfo, panes []paneInfo) []*node {
 		aggregateStatus(r)
 	}
 	return roots
+}
+
+// currentWorkspaceNode is the repo/worktree row of the workspace goto was
+// opened from (herdr reports it as focused), so the cursor starts there and
+// the list opens scrolled to where you are. Nil when none is focused.
+func currentWorkspaceNode(wss []wsInfo, nodes []*node) *node {
+	for _, ws := range wss {
+		if !ws.Focused {
+			continue
+		}
+		for _, n := range nodes {
+			if n.kind != "pane" && n.wsID == ws.ID {
+				return n
+			}
+		}
+	}
+	return nil
 }
 
 // flatten returns every node in tree order plus parallel slices of lowercased
@@ -722,10 +1060,10 @@ type rowItem struct {
 
 type model struct {
 	roots         []*node
-	allNodes      []*node  // flattened, parallel to lowerLabels/lowerBranches/lowerMetas
-	lowerLabels   []string // lowercased labels for the fuzzy matcher
-	lowerBranches []string // lowercased branches ("" when same as label); extra match text
-	lowerMetas    []string // ticket + PR number per node ("" when none); extra match text
+	allNodes      []*node            // flattened, parallel to lowerLabels/lowerBranches/lowerMetas
+	lowerLabels   []string           // lowercased labels for the fuzzy matcher
+	lowerBranches []string           // lowercased branches ("" when same as label); extra match text
+	lowerMetas    []string           // ticket + PR number per node ("" when none); extra match text
 	slugNodes     map[string][]*node // nodes with a branch, grouped by GitHub slug
 	prPending     int                // in-flight gh fetches; cache is saved when it reaches 0
 	cache         prCache            // loaded at startup, merged as repoPRsMsg arrive
@@ -744,11 +1082,10 @@ var (
 	stPrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
 	stSel    = lipgloss.NewStyle().Background(lipgloss.Color("8")).Bold(true)
 	stMatch  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	stCrumb  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	// stDev colors the "(dev)" marker shown in the prompt for non-release builds.
 	stDev = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
 
-	// Ticket / PR prefix: ticket in the crumb teal, PR number colored by state.
+	// Ticket / PR prefix: ticket in teal, PR number colored by state.
 	stTicket   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))   // teal
 	stPROpen   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))  // green
 	stPRDraft  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))   // dim
@@ -761,6 +1098,11 @@ var (
 	stDotDone    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))  // teal
 	stDotIdle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
 	stDotNone    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // dim
+
+	// Right-aligned column: listening ports on process rows (teal), the git
+	// branch on worktree rows whose branch differs from the folder label (dim).
+	stPorts  = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // teal
+	stBranch = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // dim
 )
 
 // statusDot renders the 1-rune left-gutter indicator for an aggregated agent
@@ -897,6 +1239,12 @@ func (m *model) refreshMetas() {
 			}
 			meta += fmt.Sprintf("#%d", n.pr.Number)
 		}
+		if len(n.ports) > 0 {
+			if meta != "" {
+				meta += " "
+			}
+			meta += portsText(n)
+		}
 		m.lowerMetas = append(m.lowerMetas, meta)
 	}
 }
@@ -942,7 +1290,9 @@ func (m *model) applyFilter() {
 		}
 	}
 
-	visible := func(n *node) bool { return m.showPanes || n.kind != "pane" }
+	// Process rows (panes running a command) are always listed; plain panes
+	// only when toggled on.
+	visible := func(n *node) bool { return m.showPanes || n.kind != "pane" || n.proc != "" }
 
 	var subtree func(n *node) bool
 	subtree = func(n *node) bool {
@@ -1040,7 +1390,7 @@ func (m *model) selectBestMatch() {
 	}
 }
 
-func rowLine(r rowItem, selected bool) string {
+func rowLine(r rowItem, selected bool, width int) string {
 	indent := strings.Repeat("  ", r.depth)
 	// The status dot sits in its own gutter to the left, outside the selection
 	// highlight (nested ANSI on a background renders inconsistently across
@@ -1049,13 +1399,74 @@ func rowLine(r rowItem, selected bool) string {
 	if selected {
 		// Plain text inside the highlight. Constant 2-col gutter keeps content
 		// aligned whether or not the row is selected.
-		return dot + stSel.Render("▌ "+indent+plain(r))
+		left := "▌ " + indent + plain(r)
+		text, _ := rightText(r.n)
+		content := left + rightColumn(text, width-2-lipgloss.Width(left), nil)
+		// Pad to the full row width so the highlight spans the line, not just
+		// the text (the gutter takes 2 columns).
+		if pad := width - 2 - lipgloss.Width(content); pad > 0 {
+			content += strings.Repeat(" ", pad)
+		}
+		return dot + stSel.Render(content)
 	}
 	name := r.n.label
 	if r.match {
 		name = highlight(r.n.label, r.idx)
 	}
-	return dot + "  " + indent + prPrefix(r.n) + name
+	left := "  " + indent + prPrefix(r.n) + name
+	text, st := rightText(r.n)
+	return dot + left + rightColumn(text, width-2-lipgloss.Width(left), &st)
+}
+
+// rightMaxW caps the right-aligned column so it never crowds out the row's
+// own label.
+const rightMaxW = 36
+
+// rightText is what a row shows in its right-aligned column: listening ports
+// on process rows, the branch on a worktree whose branch differs from its
+// folder label. Worktree folders are branch slugs ("feat/x" -> "feat-x"), so
+// a branch that only differs by that slugging adds nothing and is omitted.
+func rightText(n *node) (string, lipgloss.Style) {
+	switch {
+	case n.kind == "pane":
+		return portsText(n), stPorts
+	case n.kind == "worktree" && n.branch != "" && strings.ReplaceAll(n.branch, "/", "-") != n.label:
+		return n.branch, stBranch
+	}
+	return "", lipgloss.Style{}
+}
+
+// rightColumn renders text right-aligned within the room left on the row
+// (avail columns after the gutter and the label). It keeps at least two
+// columns of separation and truncates with an ellipsis; when there is no room
+// it renders nothing rather than wrapping the row. A nil style renders plain
+// text (for the selected row, whose highlight covers the whole line).
+func rightColumn(text string, avail int, st *lipgloss.Style) string {
+	if text == "" {
+		return ""
+	}
+	room := avail - 2
+	if room > rightMaxW {
+		room = rightMaxW
+	}
+	if room < 4 {
+		return ""
+	}
+	text = truncate(text, room)
+	pad := strings.Repeat(" ", avail-lipgloss.Width(text))
+	if st != nil {
+		return pad + st.Render(text)
+	}
+	return pad + text
+}
+
+// truncate shortens s to at most max runes, ending in "…" when cut.
+func truncate(s string, max int) string {
+	rs := []rune(s)
+	if len(rs) <= max {
+		return s
+	}
+	return string(rs[:max-1]) + "…"
 }
 
 // highlight styles the fuzzy-matched characters within a label.
@@ -1087,7 +1498,7 @@ func plain(r rowItem) string {
 func (m *model) renderContent() {
 	var b strings.Builder
 	for i, r := range m.rows {
-		b.WriteString(rowLine(r, i == m.cursor))
+		b.WriteString(rowLine(r, i == m.cursor, m.vp.Width))
 		if i < len(m.rows)-1 {
 			b.WriteString("\n")
 		}
@@ -1116,11 +1527,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.vp.Width = msg.Width
-		m.vp.Height = msg.Height - 3 // prompt + breadcrumb + help
+		m.vp.Height = msg.Height - 2 // prompt + help
 		if m.vp.Height < 1 {
 			m.vp.Height = 1
 		}
 		m.help.Width = msg.Width
+		m.renderContent()
+		return m, nil
+
+	case portsMsg:
+		annotatePorts(procRows(m.allNodes), msg.byPane)
+		// Ports join the search corpus; re-filter, keeping the cursor.
+		m.refreshMetas()
+		var cur *node
+		if m.cursor >= 0 && m.cursor < len(m.rows) {
+			cur = m.rows[m.cursor].n
+		}
+		m.applyFilter()
+		m.keepCursorOn(cur)
 		m.renderContent()
 		return m, nil
 
@@ -1202,11 +1626,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	crumb := ""
-	if m.cursor >= 0 && m.cursor < len(m.rows) {
-		crumb = stCrumb.Render(" " + m.rows[m.cursor].n.path)
-	}
-	return m.ti.View() + "\n" + crumb + "\n" + m.vp.View() + "\n" + m.help.View(m.keys)
+	return m.ti.View() + "\n" + m.vp.View() + "\n" + m.help.View(m.keys)
 }
 
 // version is the release tag; overridden at build time via
@@ -1271,6 +1691,24 @@ func main() {
 		initCmds = append(initCmds, fetchRepoPRsCmd(slug, branches, cache.Repos[slug].Branches))
 	}
 
+	prPending := len(initCmds)
+	paneIDs := make([]string, 0, len(pn.Result.Panes))
+	for _, p := range pn.Result.Panes {
+		paneIDs = append(paneIDs, p.ID)
+	}
+	// Process rows are resolved before the first paint (cheap, and they add
+	// rows); their ports arrive async (lsof is the slow part) and only fill the
+	// right column.
+	annotateProcs(roots, fetchProcInfos(paneIDs))
+	allNodes, lowerLabels, lowerBranches = flatten(roots)
+	if procs := procRows(allNodes); len(procs) > 0 {
+		if dump {
+			annotatePorts(procs, fetchPorts(fetchPortsCmdPids(procs)))
+		} else {
+			initCmds = append(initCmds, fetchPortsCmd(procs))
+		}
+	}
+
 	if dump {
 		var walk func(n *node, d int)
 		walk = func(n *node, d int) {
@@ -1289,7 +1727,11 @@ func main() {
 			if n.branch != "" {
 				branch = " " + n.branch
 			}
-			fmt.Printf("%s%s%s\t(%s %s %s%s)\n", strings.Repeat("  ", d), prefix, n.label, n.kind, n.status, id, branch)
+			proc := ""
+			if n.proc != "" {
+				proc = "\t[proc " + portsText(n) + "]"
+			}
+			fmt.Printf("%s%s%s\t(%s %s %s%s)%s\n", strings.Repeat("  ", d), prefix, n.label, n.kind, n.status, id, branch, proc)
 			for _, c := range n.children {
 				walk(c, d+1)
 			}
@@ -1311,7 +1753,7 @@ func main() {
 		lowerLabels:   lowerLabels,
 		lowerBranches: lowerBranches,
 		slugNodes:     slugNodes,
-		prPending:     len(initCmds),
+		prPending:     prPending,
 		cache:         cache,
 		initCmds:      initCmds,
 		showPanes:     loadState().ShowPanes,
@@ -1322,6 +1764,7 @@ func main() {
 	}
 	m.refreshMetas()
 	m.applyFilter()
+	m.keepCursorOn(currentWorkspaceNode(ws.Result.Workspaces, allNodes))
 	m.renderContent()
 
 	res, err := tea.NewProgram(m, tea.WithAltScreen()).Run()

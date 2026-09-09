@@ -76,6 +76,22 @@ Type to fuzzy-search · `↑↓`/`ctrl-n/p` move · `enter` select ·
   visible; cursor jumps to the best match. There used to be a "digits 1-9 jump
   to a numbered repo" mode; it was removed because it conflicted with searching
   by PR/ticket number.
+- A pane running a foreground command (`pnpm nx dev app`, `vitest`, ...) is
+  listed under its space as a process row labelled by the command, always
+  visible even while plain panes are hidden; enter focuses that pane. The TCP
+  ports its process tree listens on show right-aligned (`:3000`) and are
+  searchable (typing "3000" finds who holds the port). Process rows are resolved
+  before the first paint (one `pane process-info` per pane, a few ms) so the
+  list never shifts; ports (one `lsof` plus one `ps`) arrive async and only
+  fill the right column. Shells at their prompt and agent panes (already
+  conveyed by the leaf text and the status dot) are unaffected; a herdr
+  without the command, or no `lsof`, degrades silently to no process rows.
+- No breadcrumb line: the tree shows ancestors already. A worktree whose git
+  branch differs from its folder name (beyond `/` -> `-` slugging) shows the
+  branch dimmed at the right of its row.
+- The cursor starts on the space goto was opened from (the workspace herdr
+  reports as focused), so enter with an empty query is a no-op and the list
+  opens scrolled to where you are.
 - Enter on a repo/worktree -> `workspace focus` (does NOT change which pane is
   focused inside it; lands where you left it). Enter on a pane -> focus that pane.
 - No autofocus: switching repos must not select the agent pane by default.

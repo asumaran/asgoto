@@ -122,6 +122,25 @@ asset name from `uname`.
   #1234). Matches keep ancestors visible. Digits are plain search text; the
   old "1-9 jumps to a numbered repo" mode was removed on purpose — do not
   reintroduce it.
+- Process rows: a pane whose foreground process group leader is not the
+  shell (`pane process-info`, argv compressed by `shortCmd`) is relabelled
+  with the command and stays visible while plain panes are hidden (`visible`
+  in `applyFilter`). Its listening TCP ports (one `lsof -iTCP -sTCP:LISTEN`
+  matched against the group's pids and their descendants via one `ps -axo
+  pid,ppid`, since dev servers detach into their own group) render
+  right-aligned (`rightColumn`, capped at `rightMaxW`) and join the search
+  corpus. Agent panes and shells at the prompt are untouched. Process rows are
+  resolved synchronously in `main` before the first paint (cheap, and they add
+  rows, so a late arrival would shift the list); ports are fetched async from
+  Init (`fetchPortsCmd`, lsof is ~80ms) and only fill the right column.
+  Errors degrade to no rows / no ports. `-dump` runs it
+  synchronously and prints `[proc :port]`.
+- Right column (`rightText`): ports on process rows; on worktree rows the
+  branch, only when it differs from the label after `/` -> `-` slugging. The
+  breadcrumb line under the prompt was removed as redundant with the tree.
+- Initial cursor: the repo/worktree row of the focused workspace
+  (`currentWorkspaceNode`, `workspace list` `.focused`); top of the list when
+  none is focused.
 - Enter on repo/worktree -> `workspace focus` (does not change the focused pane
   inside it). Enter on pane -> focus that pane. No autofocus on switch.
 - Rows are prefixed with the Jira ticket (`KEY-123` regex over branch, then
