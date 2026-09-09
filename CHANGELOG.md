@@ -1,3 +1,8 @@
+## v0.9.1 (2026-09-09)
+
+* fix(procs): use argv0 when argv is unreadable (34f7edb)
+* chore(demo): refresh the README GIF (a6f0ab3)
+
 ## v0.9.0 (2026-09-09)
 
 * fix(release): pass a tag message so signed tags work non-interactively (2431a44)
