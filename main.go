@@ -1,7 +1,7 @@
 // herdr-goto: a small tree-style switcher across repos, worktrees and panes.
 //
 // It talks to herdr through its CLI (workspace list / pane list to read,
-// workspace focus / agent focus to act). Designed to run inside a herdr pane
+// workspace focus to act, plus pane.focus over the socket API). Designed to run inside a herdr pane
 // (type = "pane" keybind), full screen, single shot: open, pick, exit.
 //
 // The hierarchy (repos -> worktrees/panes) and the filter-that-keeps-ancestors
@@ -10,10 +10,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -780,8 +782,8 @@ func layoutHints(nodes []*node) {
 }
 
 // dirtyMark is the uncommitted-changes marker, the shell prompt's red dot.
-// Its slot is always reserved on repo/worktree rows (blank when clean) so
-// the names stay aligned.
+// Its slot is always reserved on repo/worktree rows (blank when clean), and
+// on process rows too, so names and ports all end on the same column.
 const dirtyMark = "●"
 
 // deltaText is the ahead/behind hint, in the same shape as the shell prompt:
@@ -1289,6 +1291,7 @@ type model struct {
 	help          help.Model
 	keys          keyMap
 	action        []string // herdr CLI args to run after quit (nil = no action)
+	focusPane     string   // pane to focus after quit via the socket API (pane.focus); "" = none
 }
 
 var (
@@ -1314,7 +1317,7 @@ var (
 
 	// Right-aligned column: listening ports on process rows (teal), the git
 	// branch on repo rows, and the folder on worktree rows whose branch moved (dim).
-	stPorts  = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // teal
+	stPorts  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow; not cyan, so ports never read as a delta
 	stBranch = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // dim
 	// stDelta colors the ahead/behind hint like the shell prompt's (bold cyan);
 	// stDirty the uncommitted-changes dot (red, also like the prompt).
@@ -1634,7 +1637,7 @@ func rowLine(r rowItem, selected bool, width int) string {
 }
 
 // rightMargin keeps the right-aligned column off the popup's edge.
-const rightMargin = 2
+const rightMargin = 1
 
 // rightMaxW caps the right-aligned column so it never crowds out the row's
 // own label.
@@ -1658,7 +1661,9 @@ type seg struct {
 func rightSegs(n *node) []seg {
 	if n.kind == "pane" {
 		if t := portsText(n); t != "" {
-			return []seg{{t, stPorts}}
+			// Same blank dirty slot as repo/worktree rows, so the ports end
+			// on the column the names end on.
+			return []seg{{t, stPorts}, {" ", stDirty}}
 		}
 		return nil
 	}
@@ -1869,7 +1874,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor >= 0 && m.cursor < len(m.rows) {
 				n := m.rows[m.cursor].n
 				if n.kind == "pane" {
-					m.action = []string{"agent", "focus", n.paneID}
+					m.focusPane = n.paneID
 				} else {
 					m.action = []string{"workspace", "focus", n.wsID}
 				}
@@ -2082,7 +2087,71 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if final := res.(model); final.action != nil {
+	final := res.(model)
+	if final.focusPane != "" {
+		if err := focusPane(final.focusPane); err != nil {
+			// Standalone run (no socket env) or an older server: the CLI's
+			// agent focus still lands on agent panes.
+			exec.Command(herdrBin(), "agent", "focus", final.focusPane).Run()
+		}
+	}
+	if final.action != nil {
 		exec.Command(herdrBin(), final.action...).Run()
 	}
+}
+
+// focusPane focuses an arbitrary pane (shell, process or agent) through
+// herdr's socket API (`pane.focus`, newline-delimited JSON on
+// HERDR_SOCKET_PATH). The CLI has no equivalent: `pane focus` is
+// direction-only and `agent focus <paneID>` rejects non-agent panes since
+// herdr 0.9 (agent_not_found), which used to leave shell/process rows dead.
+func focusPane(paneID string) error {
+	sock := os.Getenv("HERDR_SOCKET_PATH")
+	if sock == "" {
+		return fmt.Errorf("HERDR_SOCKET_PATH not set")
+	}
+	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	req, err := paneFocusRequest(paneID)
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Write(req); err != nil {
+		return err
+	}
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return err
+	}
+	if resp.Error != nil {
+		return fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
+	}
+	return nil
+}
+
+// paneFocusRequest encodes one `pane.focus` request line for the socket API.
+func paneFocusRequest(paneID string) ([]byte, error) {
+	req := struct {
+		ID     string            `json:"id"`
+		Method string            `json:"method"`
+		Params map[string]string `json:"params"`
+	}{ID: "goto:pane.focus", Method: "pane.focus", Params: map[string]string{"pane_id": paneID}}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }

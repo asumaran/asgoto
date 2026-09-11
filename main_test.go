@@ -355,6 +355,9 @@ func TestLayoutHintsAlignsNames(t *testing.T) {
 	if got := join(c); got != "      x-old  " {
 		t.Errorf("c: %q", got)
 	}
+	if got := join(p); got != ":3000  " {
+		t.Errorf("pane: %q, want the ports followed by the blank dirty slot", got)
+	}
 }
 
 func TestRightColumn(t *testing.T) {
@@ -425,5 +428,16 @@ func TestCurrentWorkspaceNode(t *testing.T) {
 	}
 	if got := currentWorkspaceNode([]wsInfo{{ID: "w1"}}, nodes); got != nil {
 		t.Errorf("none focused: got %v, want nil", got)
+	}
+}
+
+func TestPaneFocusRequest(t *testing.T) {
+	got, err := paneFocusRequest("w45:pF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"id":"goto:pane.focus","method":"pane.focus","params":{"pane_id":"w45:pF"}}` + "\n"
+	if string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

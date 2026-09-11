@@ -108,7 +108,7 @@ Type to fuzzy-search · `↑↓`/`ctrl-n/p` move · `enter` select ·
   after (one `git rev-list` and one `git status --porcelain -uno` per
   checkout, a few at a time), correcting the column if anything changed.
   `git status` on a large repo costs ~1s of CPU, which `core.fsmonitor=true`
-  would remove. The column keeps a 2-column margin off the popup edge.
+  would remove. The column keeps a 1-column margin off the popup edge.
 - The cursor starts on the space goto was opened from (the workspace herdr
   reports as focused), so enter with an empty query is a no-op and the list
   opens scrolled to where you are.
@@ -154,5 +154,8 @@ plugin installs, so every release must keep attaching it.
 ## herdr CLI it depends on
 
 - Read: `herdr workspace list`, `herdr pane list` (JSON).
-- Act: `herdr workspace focus <wsID>` (repo/worktree), `herdr agent focus <paneID>`
-  (a specific pane; resolves pane_id and focuses it even for shell panes).
+- Act: `herdr workspace focus <wsID>` (repo/worktree). A pane row is focused
+  with the socket API's `pane.focus` (newline-delimited JSON on
+  `HERDR_SOCKET_PATH`): the CLI's `pane focus` is direction-only and `agent
+  focus <paneID>` rejects shell/process panes since herdr 0.9, which is kept
+  only as the fallback when the socket is unavailable.

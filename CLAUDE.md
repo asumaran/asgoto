@@ -8,7 +8,8 @@ Guidance for working in this repository.
 panes, used as a replacement for herdr's native "goto" navigator. It runs as a
 herdr plugin pane (session-modal popup): open, pick a target, exit. It
 talks to herdr through its CLI (`workspace list` / `pane list` to read,
-`workspace focus` / `agent focus` to act).
+`workspace focus` to act on repos/worktrees, and the socket API's
+`pane.focus` to focus a pane, see below).
 
 Distributed as a herdr plugin (`herdr plugin install asumaran/herdr-goto`; the
 manifest's `[[build]]` runs `scripts/fetch-binary.sh`, which downloads the
@@ -150,7 +151,9 @@ asset name from `uname`.
   fixed-width so the names right-align on one column across the list: the
   delta column is sized to the widest delta of any row (`layoutHints`,
   `node.deltaW`, padded left when a row has none) and the dirty slot is
-  always reserved (blank when clean). Hints come from one `git
+  always reserved (blank when clean; process rows reserve it too so ports
+  end on the same column as names). Ports are yellow and deltas cyan so
+  `:3000` and `↑3` never read as the same thing. Hints come from one `git
   rev-list --left-right --count @{upstream}...HEAD` and one `git status
   --porcelain -uno` per checkout (`fetchDeltas`, 4 at a time: git status is
   multithreaded and ~1s CPU on a large repo), async from Init
@@ -160,7 +163,7 @@ asset name from `uname`.
   so the cached values paint and size the columns from the first frame;
   `deltaMsg` rewrites `Hints` with only the checkouts still listed and
   saves. `savePRCacheCmd` marshals synchronously so the async write never
-  races a later mutation of the maps. A `rightMargin` of 2 columns keeps the
+  races a later mutation of the maps. A `rightMargin` of 1 column keeps the
   column off the popup edge. The breadcrumb line under the prompt was
   removed as redundant with the tree.
 - Workspaces without `worktree` metadata resolve their checkout from the
@@ -169,7 +172,11 @@ asset name from `uname`.
   (`currentWorkspaceNode`, `workspace list` `.focused`); top of the list when
   none is focused.
 - Enter on repo/worktree -> `workspace focus` (does not change the focused pane
-  inside it). Enter on pane -> focus that pane. No autofocus on switch.
+  inside it). Enter on pane -> `focusPane`: a `pane.focus` request over the
+  socket API (`HERDR_SOCKET_PATH`, one JSON line each way). Not the CLI:
+  `herdr pane focus` is direction-only and `herdr agent focus <paneID>`
+  answers agent_not_found for shell/process panes since herdr 0.9, so it is
+  only the fallback when the socket env is missing. No autofocus on switch.
 - Rows are prefixed with the Jira ticket (`KEY-123` regex over branch, then
   label, then PR title as fallback) and the branch's PR number colored by
   state (open green, draft dim, merged purple, closed red). Columns align per
