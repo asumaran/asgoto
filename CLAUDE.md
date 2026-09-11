@@ -135,9 +135,36 @@ asset name from `uname`.
   Init (`fetchPortsCmd`, lsof is ~80ms) and only fill the right column.
   Errors degrade to no rows / no ports. `-dump` runs it
   synchronously and prints `[proc :port]`.
-- Right column (`rightText`): ports on process rows; on worktree rows the
-  branch, only when it differs from the label after `/` -> `-` slugging. The
-  breadcrumb line under the prompt was removed as redundant with the tree.
+- Labels: repo rows = repo name; worktree rows = the branch checked out in
+  the worktree (`node.branch`), falling back to the folder (`node.folder`,
+  herdr's workspace label) when the branch is unknown/detached. The folder is
+  the slug of the branch the worktree was created for and goes stale after a
+  checkout, which is why it is not the label; it stays in the search corpus
+  (`flatten` joins branch + folder as the extra match text).
+- Right column (`rightSegs`, styled segments; `rightText` is the plain join
+  for -dump/tests): ports on process rows. Repo/worktree rows, in the shell
+  prompt's order: the ahead/behind hint (`deltaText`, "↑n↓n", empty when in
+  sync), then the name (the branch on repo rows, always; on worktree rows
+  the folder, only when it is not the branch's `/` -> `-` slug), then the
+  dirty dot (`dirtyMark`, red, tracked files only). Both hint slots are
+  fixed-width so the names right-align on one column across the list: the
+  delta column is sized to the widest delta of any row (`layoutHints`,
+  `node.deltaW`, padded left when a row has none) and the dirty slot is
+  always reserved (blank when clean). Hints come from one `git
+  rev-list --left-right --count @{upstream}...HEAD` and one `git status
+  --porcelain -uno` per checkout (`fetchDeltas`, 4 at a time: git status is
+  multithreaded and ~1s CPU on a large repo), async from Init
+  (`fetchDeltasCmd`, `deltaMsg`) since they only fill the right column;
+  `-dump` runs it synchronously. They are cached per checkout path in
+  `prcache.json` (`prCache.Hints`, no freshness gate: always revalidated)
+  so the cached values paint and size the columns from the first frame;
+  `deltaMsg` rewrites `Hints` with only the checkouts still listed and
+  saves. `savePRCacheCmd` marshals synchronously so the async write never
+  races a later mutation of the maps. A `rightMargin` of 2 columns keeps the
+  column off the popup edge. The breadcrumb line under the prompt was
+  removed as redundant with the tree.
+- Workspaces without `worktree` metadata resolve their checkout from the
+  first pane's cwd (`gitTopLevel`) so repo rows still get branch + PR data.
 - Initial cursor: the repo/worktree row of the focused workspace
   (`currentWorkspaceNode`, `workspace list` `.focused`); top of the list when
   none is focused.

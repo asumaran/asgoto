@@ -86,9 +86,29 @@ Type to fuzzy-search · `↑↓`/`ctrl-n/p` move · `enter` select ·
   fill the right column. Shells at their prompt and agent panes (already
   conveyed by the leaf text and the status dot) are unaffected; a herdr
   without the command, or no `lsof`, degrades silently to no process rows.
-- No breadcrumb line: the tree shows ancestors already. A worktree whose git
-  branch differs from its folder name (beyond `/` -> `-` slugging) shows the
-  branch dimmed at the right of its row.
+- No breadcrumb line: the tree shows ancestors already. Repo rows are named
+  after the repo and show the checked-out branch dimmed at the right (always,
+  so a main checkout parked on a feature branch is visible at a glance).
+  Worktree rows are named after the branch checked out in them, not the
+  folder: the folder is only the slug of the branch the worktree was created
+  for, and a later `git checkout` leaves it stale. When the folder is not the
+  branch's slug (beyond `/` -> `-`), it shows dimmed at the right and stays
+  searchable, so a worktree created as `foo` and now on `as-foo-bar-test`
+  reads `as-foo-bar-test  foo`. A detached HEAD falls back to the folder.
+  Workspaces herdr reports no worktree metadata for resolve their checkout
+  from the first pane's cwd, so they still get a branch. The right column of
+  repo and worktree rows follows the shell prompt's shape: the ahead/behind
+  hint (`↑2` to push, `↓1` to pull, nothing when in sync or without
+  upstream), then the name, then a red `●` when tracked files are modified
+  (untracked files are ignored, like the prompt). Both hint slots keep a
+  fixed width (the delta column as wide as the widest delta, the dot always
+  reserved) so the names line up on one column. Both hints are cached per
+  checkout in `prcache.json` (stale-while-revalidate, like the PRs): the last
+  known values paint on open, already sized, and git revalidates them right
+  after (one `git rev-list` and one `git status --porcelain -uno` per
+  checkout, a few at a time), correcting the column if anything changed.
+  `git status` on a large repo costs ~1s of CPU, which `core.fsmonitor=true`
+  would remove. The column keeps a 2-column margin off the popup edge.
 - The cursor starts on the space goto was opened from (the workspace herdr
   reports as focused), so enter with an empty query is a no-op and the list
   opens scrolled to where you are.

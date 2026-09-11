@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -75,8 +76,14 @@ type paneResp struct {
 
 type node struct {
 	kind     string // "repo" | "worktree" | "pane"
-	label    string // own display text (matched against the query)
-	branch   string // git branch of the checkout; extra search text (labels are folder slugs, branches keep their "/")
+	label    string // own display text (matched against the query); repo name, worktree branch (folder when unknown), pane leaf
+	branch   string // git branch of the checkout ("" when detached/unknown); shown dim on repo rows, extra search text
+	folder   string // worktree only: checkout folder name (herdr's workspace label); shown dim when it no longer matches the branch, extra search text
+	checkout string // repo/worktree: path of the checkout, for the async ahead/behind lookup ("" when unknown)
+	ahead    int    // commits ahead of the upstream (filled async by deltaMsg)
+	behind   int    // commits behind the upstream (filled async by deltaMsg)
+	dirty    bool   // tracked files modified in the checkout (filled async by deltaMsg)
+	deltaW   int    // width of the ahead/behind column shared by every repo/worktree row (0 = none has a delta)
 	ticket   string // normalized Jira key ("FED-2030") from branch/label, or the PR title as fallback
 	ghSlug   string // "owner/repo" of the GitHub origin; "" when non-GitHub/unknown
 	pr       *prRef // PR for this branch, annotated from cache/gh; nil until known or when none
@@ -173,12 +180,15 @@ type repoPRs struct {
 	Branches  map[string]prRef `json:"branches"`
 }
 
-// prCache is the stale-while-revalidate disk cache of branch -> PR per repo:
-// cached entries render immediately on startup while gh refreshes them in the
-// background, so PR info is visible even in this tool's open-pick-exit
-// lifetime.
+// prCache is the stale-while-revalidate disk cache of branch -> PR per repo
+// and of the git hints (ahead/behind, dirty) per checkout path: cached
+// entries render immediately on startup while gh / git refresh them in the
+// background, so the info is visible even in this tool's open-pick-exit
+// lifetime, and the hint columns are sized from the first paint instead of
+// shifting when the refresh lands.
 type prCache struct {
-	Repos map[string]repoPRs `json:"repos"`
+	Repos map[string]repoPRs  `json:"repos"`
+	Hints map[string]gitDelta `json:"hints,omitempty"`
 }
 
 // prCacheFresh is how recent a repo's cached PRs must be to skip the
@@ -198,16 +208,24 @@ func loadPRCache() prCache {
 	if c.Repos == nil {
 		c.Repos = map[string]repoPRs{}
 	}
+	if c.Hints == nil {
+		c.Hints = map[string]gitDelta{}
+	}
 	return c
 }
 
+// savePRCacheCmd writes the cache to disk off the update loop. It is
+// serialized here, synchronously, so the async write never reads the maps
+// while a later message mutates them.
 func savePRCacheCmd(c prCache) tea.Cmd {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return nil
+	}
 	return func() tea.Msg {
-		if data, err := json.Marshal(c); err == nil {
-			path := prCacheFile()
-			_ = os.MkdirAll(filepath.Dir(path), 0o755)
-			_ = os.WriteFile(path, data, 0o644)
-		}
+		path := prCacheFile()
+		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+		_ = os.WriteFile(path, data, 0o644)
 		return nil
 	}
 }
@@ -626,6 +644,159 @@ func portsText(n *node) string {
 	return strings.Join(parts, " ")
 }
 
+// ---- ahead/behind vs upstream ----
+
+// gitDelta is one checkout's commit delta against its upstream plus whether
+// it has uncommitted changes to tracked files.
+type gitDelta struct {
+	Ahead  int  `json:"ahead"`
+	Behind int  `json:"behind"`
+	Dirty  bool `json:"dirty"`
+}
+
+// deltaMsg delivers the ahead/behind + dirty state of every repo/worktree
+// checkout, keyed by checkout path (the cache key too). Checkouts where git
+// failed are absent, leaving whatever was cached.
+type deltaMsg struct {
+	byCheckout map[string]gitDelta
+}
+
+// deltaNodes lists the repo/worktree rows whose checkout is known.
+func deltaNodes(nodes []*node) []*node {
+	var out []*node
+	for _, n := range nodes {
+		if n.kind != "pane" && n.checkout != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// fetchDeltasCmd resolves the ahead/behind and dirty hints of each checkout
+// after the TUI is on screen. They need one `git rev-list` and one `git
+// status` per checkout (not derivable from the filesystem without walking
+// history / the index), run in parallel, so it is async like the ports: the
+// hints only fill the right column and never shift rows.
+func fetchDeltasCmd(nodes []*node) tea.Cmd {
+	return func() tea.Msg {
+		return deltaMsg{byCheckout: fetchDeltas(nodes)}
+	}
+}
+
+func fetchDeltas(nodes []*node) map[string]gitDelta {
+	if len(nodes) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	type result struct {
+		checkout string
+		d        gitDelta
+		ok       bool
+	}
+	results := make([]result, len(nodes))
+	// git status refreshes the index with a thread per core, so 20 checkouts
+	// at once would thrash; a few at a time keeps the burst short (a large
+	// repo costs ~80ms wall / ~1s CPU) without serializing everything.
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for i, n := range nodes {
+		wg.Add(1)
+		go func(i int, n *node) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			var d gitDelta
+			ok := false
+			// No upstream / detached HEAD fails here; the dirty check below
+			// still applies, so a failure only means "no ahead/behind".
+			if out, err := exec.CommandContext(ctx, "git", "-C", n.checkout,
+				"rev-list", "--left-right", "--count", "@{upstream}...HEAD").Output(); err == nil {
+				d, ok = parseDelta(string(out))
+			}
+			// Tracked files only (-uno), like the shell prompt's dirty dot
+			// (DISABLE_UNTRACKED_FILES_DIRTY); untracked files are not
+			// "work at risk" in the same way and make big repos slow.
+			if out, err := exec.CommandContext(ctx, "git", "-C", n.checkout,
+				"status", "--porcelain", "-uno").Output(); err == nil {
+				d.Dirty = len(bytes.TrimSpace(out)) > 0
+				ok = true
+			}
+			results[i] = result{checkout: n.checkout, d: d, ok: ok}
+		}(i, n)
+	}
+	wg.Wait()
+	byCheckout := map[string]gitDelta{}
+	for _, r := range results {
+		if r.ok {
+			byCheckout[r.checkout] = r.d
+		}
+	}
+	return byCheckout
+}
+
+// parseDelta reads `git rev-list --left-right --count @{upstream}...HEAD`
+// output: "<behind>\t<ahead>".
+func parseDelta(out string) (gitDelta, bool) {
+	fields := strings.Fields(out)
+	if len(fields) != 2 {
+		return gitDelta{}, false
+	}
+	behind, err1 := strconv.Atoi(fields[0])
+	ahead, err2 := strconv.Atoi(fields[1])
+	if err1 != nil || err2 != nil {
+		return gitDelta{}, false
+	}
+	return gitDelta{Ahead: ahead, Behind: behind}, true
+}
+
+// annotateDeltas stamps the ahead/behind counts and dirty flag on
+// repo/worktree rows, from the cache at startup and from git when it lands.
+func annotateDeltas(nodes []*node, byCheckout map[string]gitDelta) {
+	for _, n := range nodes {
+		if d, ok := byCheckout[n.checkout]; ok {
+			n.ahead, n.behind, n.dirty = d.Ahead, d.Behind, d.Dirty
+		}
+	}
+}
+
+// layoutHints sizes the ahead/behind column: one width shared by every
+// repo/worktree row (the widest delta), so rows without a delta pad it and
+// the names right-align on the same column across the whole list.
+func layoutHints(nodes []*node) {
+	w := 0
+	for _, n := range nodes {
+		if n.kind != "pane" {
+			if dw := lipgloss.Width(deltaText(n)); dw > w {
+				w = dw
+			}
+		}
+	}
+	for _, n := range nodes {
+		if n.kind != "pane" {
+			n.deltaW = w
+		}
+	}
+}
+
+// dirtyMark is the uncommitted-changes marker, the shell prompt's red dot.
+// Its slot is always reserved on repo/worktree rows (blank when clean) so
+// the names stay aligned.
+const dirtyMark = "●"
+
+// deltaText is the ahead/behind hint, in the same shape as the shell prompt:
+// "↑n" commits to push, "↓n" commits to pull, "" when in sync or unknown.
+func deltaText(n *node) string {
+	var b strings.Builder
+	if n.ahead > 0 {
+		fmt.Fprintf(&b, "↑%d", n.ahead)
+	}
+	if n.behind > 0 {
+		fmt.Fprintf(&b, "↓%d", n.behind)
+	}
+	return b.String()
+}
+
 func loadJSON(args []string, out any) error {
 	data, err := exec.Command(herdrBin(), args...).Output()
 	if err != nil {
@@ -667,6 +838,19 @@ func resolveGitDir(path string) string {
 		gitdir = target
 	}
 	return gitdir
+}
+
+// gitTopLevel walks up from path to the nearest directory holding a .git
+// entry (dir or linked-worktree file). Returns "" when none is found. Used
+// for workspaces herdr reports no worktree metadata for, whose checkout is
+// only known through a pane's cwd.
+func gitTopLevel(path string) string {
+	for p := path; p != "" && p != "/"; p = filepath.Dir(p) {
+		if _, err := os.Stat(filepath.Join(p, ".git")); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 // gitBranch resolves the branch checked out at path by reading .git/HEAD
@@ -930,10 +1114,21 @@ func buildTree(wss []wsInfo, panes []paneInfo) []*node {
 		}
 		name := repoName(main)
 		repo := &node{kind: "repo", label: name, wsID: main.ID, expanded: true}
+		checkout, root := "", ""
 		if main.Worktree != nil {
-			repo.branch = gitBranch(main.Worktree.CheckoutPath)
+			checkout, root = main.Worktree.CheckoutPath, main.Worktree.RepoRoot
+		} else if ps := byWs[main.ID]; len(ps) > 0 {
+			// herdr reported no worktree metadata (e.g. the space was
+			// created before its git discovery ran); the first pane's cwd
+			// still tells us which checkout this is.
+			checkout = gitTopLevel(ps[0].Cwd)
+			root = checkout
+		}
+		if checkout != "" {
+			repo.checkout = checkout
+			repo.branch = gitBranch(checkout)
 			repo.ticket = ticketFrom(repo.branch)
-			repo.ghSlug = slugFor(main.Worktree.RepoRoot)
+			repo.ghSlug = slugFor(root)
 		}
 		repo.children = append(repo.children, paneNodes(main.ID)...)
 
@@ -966,11 +1161,19 @@ func buildTree(wss []wsInfo, panes []paneInfo) []*node {
 			others[i] = w.ws
 		}
 		for _, ws := range others {
-			wt := &node{kind: "worktree", label: ws.Label, wsID: ws.ID, expanded: true}
+			// A worktree row is named after the branch checked out in it:
+			// the folder is just the slug of whatever branch it was created
+			// for, and a later checkout leaves it stale (herdr's sidebar
+			// shows the same branch under the folder label).
+			wt := &node{kind: "worktree", label: ws.Label, folder: ws.Label, wsID: ws.ID, expanded: true}
 			if ws.Worktree != nil {
+				wt.checkout = ws.Worktree.CheckoutPath
 				wt.branch = gitBranch(ws.Worktree.CheckoutPath)
 				wt.ticket = ticketFrom(wt.branch, ws.Label)
 				wt.ghSlug = slugFor(ws.Worktree.RepoRoot)
+			}
+			if wt.branch != "" {
+				wt.label = wt.branch
 			}
 			wt.children = paneNodes(ws.ID)
 			repo.children = append(repo.children, wt)
@@ -1001,9 +1204,10 @@ func currentWorkspaceNode(wss []wsInfo, nodes []*node) *node {
 }
 
 // flatten returns every node in tree order plus parallel slices of lowercased
-// labels and branches, fed to the fuzzy matcher in one shot per keystroke. A
-// node's branch entry is "" when it adds nothing over the label (no branch, or
-// identical), so the matcher skips it.
+// labels and extra match text (branch and worktree folder), fed to the fuzzy
+// matcher in one shot per keystroke. A node's extra entry is "" when it adds
+// nothing over the label (no branch/folder, or identical), so the matcher
+// skips it.
 func flatten(roots []*node) ([]*node, []string, []string) {
 	var nodes []*node
 	var labels []string
@@ -1013,11 +1217,13 @@ func flatten(roots []*node) ([]*node, []string, []string) {
 		nodes = append(nodes, n)
 		label := strings.ToLower(n.label)
 		labels = append(labels, label)
-		branch := strings.ToLower(n.branch)
-		if branch == label {
-			branch = ""
+		var extra []string
+		for _, s := range []string{n.branch, n.folder} {
+			if s = strings.ToLower(s); s != "" && s != label {
+				extra = append(extra, s)
+			}
 		}
-		branches = append(branches, branch)
+		branches = append(branches, strings.Join(extra, " "))
 		for _, c := range n.children {
 			walk(c)
 		}
@@ -1069,7 +1275,7 @@ type model struct {
 	roots         []*node
 	allNodes      []*node            // flattened, parallel to lowerLabels/lowerBranches/lowerMetas
 	lowerLabels   []string           // lowercased labels for the fuzzy matcher
-	lowerBranches []string           // lowercased branches ("" when same as label); extra match text
+	lowerBranches []string           // lowercased branch + worktree folder ("" when same as label); extra match text
 	lowerMetas    []string           // ticket + PR number per node ("" when none); extra match text
 	slugNodes     map[string][]*node // nodes with a branch, grouped by GitHub slug
 	prPending     int                // in-flight gh fetches; cache is saved when it reaches 0
@@ -1107,9 +1313,13 @@ var (
 	stDotNone    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // dim
 
 	// Right-aligned column: listening ports on process rows (teal), the git
-	// branch on worktree rows whose branch differs from the folder label (dim).
+	// branch on repo rows, and the folder on worktree rows whose branch moved (dim).
 	stPorts  = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // teal
 	stBranch = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // dim
+	// stDelta colors the ahead/behind hint like the shell prompt's (bold cyan);
+	// stDirty the uncommitted-changes dot (red, also like the prompt).
+	stDelta = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
+	stDirty = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 )
 
 // statusDot renders the 1-rune left-gutter indicator for an aggregated agent
@@ -1407,8 +1617,7 @@ func rowLine(r rowItem, selected bool, width int) string {
 		// Plain text inside the highlight. Constant 2-col gutter keeps content
 		// aligned whether or not the row is selected.
 		left := "▌ " + indent + plain(r)
-		text, _ := rightText(r.n)
-		content := left + rightColumn(text, width-2-lipgloss.Width(left), nil)
+		content := left + rightColumn(rightSegs(r.n), width-2-rightMargin-lipgloss.Width(left), false)
 		// Pad to the full row width so the highlight spans the line, not just
 		// the text (the gutter takes 2 columns).
 		if pad := width - 2 - lipgloss.Width(content); pad > 0 {
@@ -1421,35 +1630,76 @@ func rowLine(r rowItem, selected bool, width int) string {
 		name = highlight(r.n.label, r.idx)
 	}
 	left := "  " + indent + prPrefix(r.n) + name
-	text, st := rightText(r.n)
-	return dot + left + rightColumn(text, width-2-lipgloss.Width(left), &st)
+	return dot + left + rightColumn(rightSegs(r.n), width-2-rightMargin-lipgloss.Width(left), true)
 }
+
+// rightMargin keeps the right-aligned column off the popup's edge.
+const rightMargin = 2
 
 // rightMaxW caps the right-aligned column so it never crowds out the row's
 // own label.
 const rightMaxW = 36
 
-// rightText is what a row shows in its right-aligned column: listening ports
-// on process rows, the branch on a worktree whose branch differs from its
-// folder label. Worktree folders are branch slugs ("feat/x" -> "feat-x"), so
-// a branch that only differs by that slugging adds nothing and is omitted.
-func rightText(n *node) (string, lipgloss.Style) {
-	switch {
-	case n.kind == "pane":
-		return portsText(n), stPorts
-	case n.kind == "worktree" && n.branch != "" && strings.ReplaceAll(n.branch, "/", "-") != n.label:
-		return n.branch, stBranch
-	}
-	return "", lipgloss.Style{}
+// seg is one styled piece of a row's right column.
+type seg struct {
+	text string
+	st   lipgloss.Style
 }
 
-// rightColumn renders text right-aligned within the room left on the row
-// (avail columns after the gutter and the label). It keeps at least two
-// columns of separation and truncates with an ellipsis; when there is no room
-// it renders nothing rather than wrapping the row. A nil style renders plain
-// text (for the selected row, whose highlight covers the whole line).
-func rightColumn(text string, avail int, st *lipgloss.Style) string {
-	if text == "" {
+// rightSegs is what a row shows in its right-aligned column. Process rows:
+// their listening ports. Repo and worktree rows, in the shell prompt's
+// order: the ahead/behind hint (when not in sync), then the name, then the
+// dirty dot (when tracked files are modified). The name is the checked-out
+// branch on repo rows (always, so a main checkout sitting on a feature
+// branch is visible at a glance); on worktree rows, whose label already is
+// the branch, it is the folder name, only when the branch is known and the
+// folder is not its slug ("feat/x" -> "feat-x" adds nothing), i.e. the
+// worktree was created for one branch and now has another checked out.
+func rightSegs(n *node) []seg {
+	if n.kind == "pane" {
+		if t := portsText(n); t != "" {
+			return []seg{{t, stPorts}}
+		}
+		return nil
+	}
+	var segs []seg
+	if n.deltaW > 0 {
+		d := deltaText(n)
+		segs = append(segs, seg{strings.Repeat(" ", n.deltaW-lipgloss.Width(d)) + d, stDelta})
+	}
+	switch {
+	case n.kind == "repo" && n.branch != "":
+		segs = append(segs, seg{n.branch, stBranch})
+	case n.kind == "worktree" && n.branch != "" && strings.ReplaceAll(n.branch, "/", "-") != n.folder:
+		segs = append(segs, seg{n.folder, stBranch})
+	}
+	if n.dirty {
+		segs = append(segs, seg{dirtyMark, stDirty})
+	} else {
+		segs = append(segs, seg{" ", stDirty})
+	}
+	return segs
+}
+
+// rightText is the right column as plain text (segments space-joined,
+// alignment padding trimmed), for -dump and tests.
+func rightText(n *node) string {
+	segs := rightSegs(n)
+	parts := make([]string, len(segs))
+	for i, s := range segs {
+		parts[i] = s.text
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+// rightColumn renders the segments right-aligned within the room left on the
+// row (avail columns after the gutter, the label and the margin). It keeps at
+// least two columns of separation and truncates with an ellipsis (dropping
+// the per-segment styling, since the cut may fall inside one); when there is
+// no room it renders nothing rather than wrapping the row. styled=false
+// renders plain text (for the selected row, whose highlight covers the line).
+func rightColumn(segs []seg, avail int, styled bool) string {
+	if len(segs) == 0 {
 		return ""
 	}
 	room := avail - 2
@@ -1459,12 +1709,27 @@ func rightColumn(text string, avail int, st *lipgloss.Style) string {
 	if room < 4 {
 		return ""
 	}
-	text = truncate(text, room)
-	pad := strings.Repeat(" ", avail-lipgloss.Width(text))
-	if st != nil {
-		return pad + st.Render(text)
+	parts := make([]string, len(segs))
+	for i, s := range segs {
+		parts[i] = s.text
 	}
-	return pad + text
+	plainText := strings.Join(parts, " ")
+	if w := lipgloss.Width(plainText); w > room {
+		text := truncate(plainText, room)
+		pad := strings.Repeat(" ", avail-lipgloss.Width(text))
+		if styled {
+			return pad + segs[0].st.Render(text)
+		}
+		return pad + text
+	}
+	pad := strings.Repeat(" ", avail-lipgloss.Width(plainText))
+	if !styled {
+		return pad + plainText
+	}
+	for i, s := range segs {
+		parts[i] = s.st.Render(s.text)
+	}
+	return pad + strings.Join(parts, " ")
 }
 
 // truncate shortens s to at most max runes, ending in "…" when cut.
@@ -1541,6 +1806,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.help.Width = msg.Width
 		m.renderContent()
 		return m, nil
+
+	case deltaMsg:
+		dn := deltaNodes(m.allNodes)
+		annotateDeltas(dn, msg.byCheckout)
+		layoutHints(m.allNodes)
+		m.renderContent()
+		// Keep only the checkouts still listed, so the cache doesn't grow
+		// with removed worktrees.
+		hints := make(map[string]gitDelta, len(dn))
+		for _, n := range dn {
+			if d, ok := msg.byCheckout[n.checkout]; ok {
+				hints[n.checkout] = d
+			} else if d, ok := m.cache.Hints[n.checkout]; ok {
+				hints[n.checkout] = d
+			}
+		}
+		m.cache.Hints = hints
+		return m, savePRCacheCmd(m.cache)
 
 	case portsMsg:
 		annotatePorts(procRows(m.allNodes), msg.byPane)
@@ -1715,6 +1998,17 @@ func main() {
 			initCmds = append(initCmds, fetchPortsCmd(procs))
 		}
 	}
+	if dn := deltaNodes(allNodes); len(dn) > 0 {
+		if dump {
+			annotateDeltas(dn, fetchDeltas(dn))
+		} else {
+			// Cached hints paint first (and size the columns); git
+			// revalidates them right after.
+			annotateDeltas(dn, cache.Hints)
+			initCmds = append(initCmds, fetchDeltasCmd(dn))
+		}
+		layoutHints(allNodes)
+	}
 
 	if dump {
 		var walk func(n *node, d int)
@@ -1733,6 +2027,15 @@ func main() {
 			branch := ""
 			if n.branch != "" {
 				branch = " " + n.branch
+			}
+			if n.folder != "" && n.folder != n.label {
+				branch += " folder=" + n.folder
+			}
+			if d := deltaText(n); d != "" {
+				branch += " " + d
+			}
+			if n.dirty {
+				branch += " " + dirtyMark
 			}
 			proc := ""
 			if n.proc != "" {

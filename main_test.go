@@ -2,6 +2,7 @@ package main
 
 import (
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -124,6 +125,31 @@ func TestSearchByTicketAndPRNumber(t *testing.T) {
 	}
 	if got := matched("2035"); !got[byTicket] {
 		t.Errorf("query 2035: matched %v, want the FED-2035 node", got)
+	}
+}
+
+// TestSearchByWorktreeFolder covers that a worktree labelled by its branch is
+// still found by the folder it was created as (the name herdr shows in the
+// sidebar and the one the user typed to create it).
+func TestSearchByWorktreeFolder(t *testing.T) {
+	moved := &node{kind: "worktree", label: "as-foo-bar-test", branch: "as-foo-bar-test", folder: "foo"}
+	other := &node{kind: "worktree", label: "feat/x", branch: "feat/x", folder: "feat-x"}
+	repo := &node{kind: "repo", label: "monorepo-front", branch: "master", expanded: true, children: []*node{moved, other}}
+	roots := []*node{repo}
+
+	m := model{roots: roots, ti: textinput.New()}
+	m.allNodes, m.lowerLabels, m.lowerBranches = flatten(roots)
+	m.refreshMetas()
+	m.ti.SetValue("foo")
+	m.applyFilter()
+	got := map[*node]bool{}
+	for _, r := range m.rows {
+		if r.match {
+			got[r.n] = true
+		}
+	}
+	if !got[moved] || got[other] {
+		t.Errorf("query foo: matched %v, want only the worktree whose folder is foo", got)
 	}
 }
 
@@ -274,31 +300,117 @@ func TestRightText(t *testing.T) {
 		n    *node
 		want string
 	}{
-		{&node{kind: "worktree", label: "stg-validation", branch: "feat/stargate"}, "feat/stargate"},
-		{&node{kind: "worktree", label: "feat-x", branch: "feat/x"}, ""}, // only slugging differs
-		{&node{kind: "worktree", label: "feat-x", branch: "feat-x"}, ""},
-		{&node{kind: "repo", label: "app", branch: "main"}, ""},
+		{&node{kind: "worktree", label: "feat/stargate", branch: "feat/stargate", folder: "stg-validation"}, "stg-validation"},
+		{&node{kind: "worktree", label: "feat/x", branch: "feat/x", folder: "feat-x"}, ""}, // only slugging differs
+		{&node{kind: "worktree", label: "feat-x", branch: "feat-x", folder: "feat-x"}, ""},
+		{&node{kind: "worktree", label: "feat-x", folder: "feat-x"}, ""}, // detached / unknown branch: folder is the label
+		{&node{kind: "repo", label: "app", branch: "main"}, "main"},
+		{&node{kind: "repo", label: "app", branch: "feat/hotfix"}, "feat/hotfix"},
+		{&node{kind: "repo", label: "app"}, ""},
+		{&node{kind: "repo", label: "app", branch: "main", ahead: 2}, "↑2 main"},
+		{&node{kind: "repo", label: "app", branch: "main", ahead: 1, behind: 3}, "↑1↓3 main"},
+		{&node{kind: "repo", label: "app", branch: "main", dirty: true}, "main ●"},
+		{&node{kind: "repo", label: "app", branch: "main", ahead: 2, dirty: true}, "↑2 main ●"},
+		{&node{kind: "worktree", label: "feat/x", branch: "feat/x", folder: "feat-x", behind: 1}, "↓1"},
+		{&node{kind: "worktree", label: "feat/x", branch: "feat/x", folder: "feat-x", dirty: true}, "●"},
+		{&node{kind: "worktree", label: "as-foo", branch: "as-foo", folder: "foo", ahead: 4, dirty: true}, "↑4 foo ●"},
 		{&node{kind: "pane", ports: []int{3000, 3001}}, ":3000 :3001"},
+		{&node{kind: "pane", ahead: 2, dirty: true}, ""}, // panes never carry git hints
 	}
 	for _, c := range cases {
-		if got, _ := rightText(c.n); got != c.want {
-			t.Errorf("%s %q/%q: got %q, want %q", c.n.kind, c.n.label, c.n.branch, got, c.want)
+		layoutHints([]*node{c.n}) // the delta column only exists once sized
+		if got := rightText(c.n); got != c.want {
+			t.Errorf("%s %q/%q/%q: got %q, want %q", c.n.kind, c.n.label, c.n.branch, c.n.folder, got, c.want)
 		}
 	}
 }
 
+// TestLayoutHintsAlignsNames covers that the delta column is shared (rows
+// without a delta pad it) and the dirty slot is always reserved, so the
+// names end on the same column whatever each row's hints are.
+func TestLayoutHintsAlignsNames(t *testing.T) {
+	a := &node{kind: "repo", label: "a", branch: "main", ahead: 12, behind: 3}
+	b := &node{kind: "repo", label: "b", branch: "main", dirty: true}
+	c := &node{kind: "worktree", label: "feat/x", branch: "feat/x", folder: "x-old"}
+	p := &node{kind: "pane", ports: []int{3000}}
+	nodes := []*node{a, b, c, p}
+	layoutHints(nodes)
+	if a.deltaW != 5 || b.deltaW != 5 || c.deltaW != 5 || p.deltaW != 0 {
+		t.Fatalf("deltaW: a=%d b=%d c=%d pane=%d, want 5/5/5/0", a.deltaW, b.deltaW, c.deltaW, p.deltaW)
+	}
+	join := func(n *node) string {
+		segs := rightSegs(n)
+		parts := make([]string, len(segs))
+		for i, s := range segs {
+			parts[i] = s.text
+		}
+		return strings.Join(parts, " ")
+	}
+	if got := join(a); got != "↑12↓3 main  " {
+		t.Errorf("a: %q", got)
+	}
+	if got := join(b); got != "      main ●" {
+		t.Errorf("b: %q", got)
+	}
+	if got := join(c); got != "      x-old  " {
+		t.Errorf("c: %q", got)
+	}
+}
+
 func TestRightColumn(t *testing.T) {
-	if got := rightColumn("", 40, nil); got != "" {
+	one := func(s string) []seg { return []seg{{s, stPorts}} }
+	if got := rightColumn(nil, 40, false); got != "" {
 		t.Errorf("empty: got %q", got)
 	}
-	if got := rightColumn(":4200", 20, nil); got != "               :4200" {
+	if got := rightColumn(one(":4200"), 20, false); got != "               :4200" {
 		t.Errorf("right-align: got %q", got)
 	}
-	if got := rightColumn(":4200", 5, nil); got != "" {
+	if got := rightColumn(one(":4200"), 5, false); got != "" {
 		t.Errorf("no room: got %q, want empty", got)
 	}
-	if got := rightColumn(":4200 :4201 :4202 :4203", 12, nil); got != "  :4200 :42…" {
+	if got := rightColumn(one(":4200 :4201 :4202 :4203"), 12, false); got != "  :4200 :42…" {
 		t.Errorf("truncate: got %q", got)
+	}
+	two := []seg{{"↑2", stDelta}, {"main", stBranch}}
+	if got := rightColumn(two, 12, false); got != "     ↑2 main" {
+		t.Errorf("two segments: got %q", got)
+	}
+	if got := rightColumn(two, 8, false); got != "  ↑2 ma…" {
+		t.Errorf("two segments truncated: got %q", got)
+	}
+}
+
+func TestParseDelta(t *testing.T) {
+	if d, ok := parseDelta("3\t1\n"); !ok || d.Behind != 3 || d.Ahead != 1 {
+		t.Errorf("parse: got %+v ok=%v", d, ok)
+	}
+	if _, ok := parseDelta(""); ok {
+		t.Error("empty output should not parse")
+	}
+	if _, ok := parseDelta("x\ty"); ok {
+		t.Error("non-numeric output should not parse")
+	}
+	n := &node{ahead: 2, behind: 1}
+	if got := deltaText(n); got != "↑2↓1" {
+		t.Errorf("deltaText: got %q", got)
+	}
+	if got := deltaText(&node{}); got != "" {
+		t.Errorf("deltaText in sync: got %q", got)
+	}
+}
+
+// TestAnnotateDeltasByCheckout covers that hints are keyed by checkout path
+// (the cache key), so a cached entry applies to whichever workspace holds
+// that checkout, and checkouts absent from the map keep what they had.
+func TestAnnotateDeltasByCheckout(t *testing.T) {
+	a := &node{kind: "repo", wsID: "w1", checkout: "/r/a"}
+	b := &node{kind: "worktree", wsID: "w2", checkout: "/r/b", ahead: 9}
+	annotateDeltas([]*node{a, b}, map[string]gitDelta{"/r/a": {Ahead: 2, Dirty: true}})
+	if a.ahead != 2 || !a.dirty {
+		t.Errorf("a: ahead=%d dirty=%v, want 2/true", a.ahead, a.dirty)
+	}
+	if b.ahead != 9 {
+		t.Errorf("b: ahead=%d, want the previous 9 kept", b.ahead)
 	}
 }
 
