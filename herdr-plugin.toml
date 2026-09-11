@@ -28,5 +28,5 @@ id = "goto"
 title = "Goto"
 placement = "popup"
 width = "55%"
-height = "50%"
+height = "90%"
 command = ["./goto"]
