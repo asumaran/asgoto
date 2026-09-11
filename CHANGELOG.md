@@ -1,3 +1,8 @@
+## v0.10.1 (2026-09-11)
+
+* chore(demo): refresh the README GIF with yellow ports and aligned columns (7e44893)
+* fix(tui): focus shell and process panes via pane.focus (01d1cae)
+
 ## v0.10.0 (2026-09-11)
 
 * chore(demo): refresh the README GIF with branch labels and git hints (d7951ab)
