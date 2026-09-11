@@ -1,3 +1,8 @@
+## v0.10.0 (2026-09-11)
+
+* chore(demo): refresh the README GIF with branch labels and git hints (d7951ab)
+* feat(tui): label worktrees by branch, add git hints (b5983a2)
+
 ## v0.9.1 (2026-09-09)
 
 * fix(procs): use argv0 when argv is unreadable (34f7edb)
