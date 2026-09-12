@@ -144,18 +144,26 @@ asset name from `uname`.
   (`flatten` joins branch + folder as the extra match text).
 - Right column (`rightSegs`, styled segments; `rightText` is the plain join
   for -dump/tests): ports on process rows. Repo/worktree rows, in the shell
-  prompt's order: the ahead/behind hint (`deltaText`, "↑n↓n", empty when in
-  sync), then the name (the branch on repo rows, always; on worktree rows
-  the folder, only when it is not the branch's `/` -> `-` slug), then the
-  dirty dot (`dirtyMark`, red, tracked files only). Both hint slots are
-  fixed-width so the names right-align on one column across the list: the
-  delta column is sized to the widest delta of any row (`layoutHints`,
-  `node.deltaW`, padded left when a row has none) and the dirty slot is
-  always reserved (blank when clean; process rows reserve it too so ports
-  end on the same column as names). Ports are yellow and deltas cyan so
-  `:3000` and `↑3` never read as the same thing. Hints come from one `git
-  rev-list --left-right --count @{upstream}...HEAD` and one `git status
-  --porcelain -uno` per checkout (`fetchDeltas`, 4 at a time: git status is
+  prompt's order: the name (the branch on repo rows, always; on worktree
+  rows the folder, only when it is not the branch's `/` -> `-` slug), then
+  the ahead/behind hint (`deltaText`, "↑n↓n", empty when in sync), then the
+  working-tree counters (`countsText`/`countSegs`, "+n !n ?n"
+  staged/unstaged/untracked, each hidden at zero) — the same order, symbols
+  and 256-color palette as the zsh prompt's `git_prompt_segment` and the
+  Claude Code statusline (dotfiles-bash: modules/zsh/zshrc.template,
+  modules/claude-code/statusline-command.sh): delta pink bold (212), staged
+  green (84), unstaged yellow (228), untracked dim (245); keep the three in
+  sync. Every hint is its own fixed-width column, sized by the row with the
+  widest value and absent when no row has it (`layoutHints`, `node.deltaW`
+  / `stagedW` / `unstagW` / `untrkW`; rows with a shorter/absent value pad
+  the slot, left-aligned so the ↑/+/!/? symbols stack vertically), so the
+  names right-align on one column and each counter aligns with its own kind
+  across the list; the widths are stamped on pane rows too, whose blank
+  slots make ports end on the column the names end on. Ports are yellow-3
+  and deltas pink so `:3000` and `↑3` never read as the same thing. Hints come from one `git status
+  --porcelain=v1 -b --untracked-files=normal` per checkout (`fetchDeltas` ->
+  `parseStatus`: ahead/behind from the `## ` header, counts from the entry
+  lines; 4 at a time: git status is
   multithreaded and ~1s CPU on a large repo), async from Init
   (`fetchDeltasCmd`, `deltaMsg`) since they only fill the right column;
   `-dump` runs it synchronously. They are cached per checkout path in

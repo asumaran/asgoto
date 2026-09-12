@@ -11,7 +11,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -84,8 +83,13 @@ type node struct {
 	checkout string // repo/worktree: path of the checkout, for the async ahead/behind lookup ("" when unknown)
 	ahead    int    // commits ahead of the upstream (filled async by deltaMsg)
 	behind   int    // commits behind the upstream (filled async by deltaMsg)
-	dirty    bool   // tracked files modified in the checkout (filled async by deltaMsg)
-	deltaW   int    // width of the ahead/behind column shared by every repo/worktree row (0 = none has a delta)
+	staged   int    // staged files in the checkout (filled async by deltaMsg)
+	unstaged int    // tracked files modified but not staged (filled async by deltaMsg)
+	untrack  int    // untracked files (filled async by deltaMsg)
+	deltaW   int    // width of the ahead/behind column shared by every row (0 = no row has a delta)
+	stagedW  int    // width of the "+n" column shared by every row (0 = no row has staged files)
+	unstagW  int    // width of the "!n" column shared by every row (0 = no row has unstaged files)
+	untrkW   int    // width of the "?n" column shared by every row (0 = no row has untracked files)
 	ticket   string // normalized Jira key ("FED-2030") from branch/label, or the PR title as fallback
 	ghSlug   string // "owner/repo" of the GitHub origin; "" when non-GitHub/unknown
 	pr       *prRef // PR for this branch, annotated from cache/gh; nil until known or when none
@@ -183,7 +187,7 @@ type repoPRs struct {
 }
 
 // prCache is the stale-while-revalidate disk cache of branch -> PR per repo
-// and of the git hints (ahead/behind, dirty) per checkout path: cached
+// and of the git hints (ahead/behind, staged/unstaged/untracked) per checkout path: cached
 // entries render immediately on startup while gh / git refresh them in the
 // background, so the info is visible even in this tool's open-pick-exit
 // lifetime, and the hint columns are sized from the first paint instead of
@@ -648,15 +652,18 @@ func portsText(n *node) string {
 
 // ---- ahead/behind vs upstream ----
 
-// gitDelta is one checkout's commit delta against its upstream plus whether
-// it has uncommitted changes to tracked files.
+// gitDelta is one checkout's commit delta against its upstream plus its
+// working-tree counters (staged, unstaged, untracked), the same numbers the
+// shell prompt and the Claude Code statusline show as "+n !n ?n".
 type gitDelta struct {
-	Ahead  int  `json:"ahead"`
-	Behind int  `json:"behind"`
-	Dirty  bool `json:"dirty"`
+	Ahead     int `json:"ahead"`
+	Behind    int `json:"behind"`
+	Staged    int `json:"staged"`
+	Unstaged  int `json:"unstaged"`
+	Untracked int `json:"untracked"`
 }
 
-// deltaMsg delivers the ahead/behind + dirty state of every repo/worktree
+// deltaMsg delivers the ahead/behind + working-tree state of every repo/worktree
 // checkout, keyed by checkout path (the cache key too). Checkouts where git
 // failed are absent, leaving whatever was cached.
 type deltaMsg struct {
@@ -674,11 +681,11 @@ func deltaNodes(nodes []*node) []*node {
 	return out
 }
 
-// fetchDeltasCmd resolves the ahead/behind and dirty hints of each checkout
-// after the TUI is on screen. They need one `git rev-list` and one `git
-// status` per checkout (not derivable from the filesystem without walking
-// history / the index), run in parallel, so it is async like the ports: the
-// hints only fill the right column and never shift rows.
+// fetchDeltasCmd resolves the ahead/behind and working-tree hints of each
+// checkout after the TUI is on screen. They need one `git status` per
+// checkout (not derivable from the filesystem without walking the index),
+// run in parallel, so it is async like the ports: the hints only fill the
+// right column and never shift rows.
 func fetchDeltasCmd(nodes []*node) tea.Cmd {
 	return func() tea.Msg {
 		return deltaMsg{byCheckout: fetchDeltas(nodes)}
@@ -710,19 +717,14 @@ func fetchDeltas(nodes []*node) map[string]gitDelta {
 			defer func() { <-sem }()
 			var d gitDelta
 			ok := false
-			// No upstream / detached HEAD fails here; the dirty check below
-			// still applies, so a failure only means "no ahead/behind".
+			// One `git status -b` feeds everything, exactly like the shell
+			// prompt: the header carries ahead/behind vs the upstream (absent
+			// when there is no upstream / detached HEAD, which just means "no
+			// delta") and the entry lines are counted into staged/unstaged/
+			// untracked.
 			if out, err := exec.CommandContext(ctx, "git", "-C", n.checkout,
-				"rev-list", "--left-right", "--count", "@{upstream}...HEAD").Output(); err == nil {
-				d, ok = parseDelta(string(out))
-			}
-			// Tracked files only (-uno), like the shell prompt's dirty dot
-			// (DISABLE_UNTRACKED_FILES_DIRTY); untracked files are not
-			// "work at risk" in the same way and make big repos slow.
-			if out, err := exec.CommandContext(ctx, "git", "-C", n.checkout,
-				"status", "--porcelain", "-uno").Output(); err == nil {
-				d.Dirty = len(bytes.TrimSpace(out)) > 0
-				ok = true
+				"status", "--porcelain=v1", "-b", "--untracked-files=normal").Output(); err == nil {
+				d, ok = parseStatus(string(out))
 			}
 			results[i] = result{checkout: n.checkout, d: d, ok: ok}
 		}(i, n)
@@ -737,54 +739,85 @@ func fetchDeltas(nodes []*node) map[string]gitDelta {
 	return byCheckout
 }
 
-// parseDelta reads `git rev-list --left-right --count @{upstream}...HEAD`
-// output: "<behind>\t<ahead>".
-func parseDelta(out string) (gitDelta, bool) {
-	fields := strings.Fields(out)
-	if len(fields) != 2 {
+// parseStatus reads `git status --porcelain=v1 -b` output: the "## " header
+// line for the ahead/behind counts ("## branch...upstream [ahead 1, behind
+// 2]") and one entry line per changed file, counted into staged (index
+// column set), unstaged (worktree column set) and untracked ("??").
+func parseStatus(out string) (gitDelta, bool) {
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], "## ") {
 		return gitDelta{}, false
 	}
-	behind, err1 := strconv.Atoi(fields[0])
-	ahead, err2 := strconv.Atoi(fields[1])
-	if err1 != nil || err2 != nil {
-		return gitDelta{}, false
+	var d gitDelta
+	header := lines[0]
+	if i := strings.LastIndex(header, " ["); i >= 0 && strings.HasSuffix(header, "]") {
+		for _, part := range strings.Split(header[i+2:len(header)-1], ", ") {
+			if v, found := strings.CutPrefix(part, "ahead "); found {
+				d.Ahead, _ = strconv.Atoi(v)
+			} else if v, found := strings.CutPrefix(part, "behind "); found {
+				d.Behind, _ = strconv.Atoi(v)
+			}
+		}
 	}
-	return gitDelta{Ahead: ahead, Behind: behind}, true
+	for _, line := range lines[1:] {
+		if len(line) < 2 {
+			continue
+		}
+		if line[0] == '?' {
+			d.Untracked++
+			continue
+		}
+		if line[0] != ' ' {
+			d.Staged++
+		}
+		if line[1] != ' ' {
+			d.Unstaged++
+		}
+	}
+	return d, true
 }
 
-// annotateDeltas stamps the ahead/behind counts and dirty flag on
+// annotateDeltas stamps the ahead/behind and working-tree counts on
 // repo/worktree rows, from the cache at startup and from git when it lands.
 func annotateDeltas(nodes []*node, byCheckout map[string]gitDelta) {
 	for _, n := range nodes {
 		if d, ok := byCheckout[n.checkout]; ok {
-			n.ahead, n.behind, n.dirty = d.Ahead, d.Behind, d.Dirty
+			n.ahead, n.behind = d.Ahead, d.Behind
+			n.staged, n.unstaged, n.untrack = d.Staged, d.Unstaged, d.Untracked
 		}
 	}
 }
 
-// layoutHints sizes the ahead/behind column: one width shared by every
-// repo/worktree row (the widest delta), so rows without a delta pad it and
-// the names right-align on the same column across the whole list.
+// layoutHints sizes the hint columns right of the names: the ahead/behind
+// column plus one column per working-tree counter (staged, unstaged,
+// untracked), each as wide as the widest value of any repo/worktree row
+// and absent (width 0) when no row has it, so the symbols align vertically
+// and rows with a shorter/absent value pad the slot. All widths are
+// stamped on pane rows too, whose blank slots keep ports ending on the
+// column the names end on. Together they make the names right-align on one
+// column across the list.
 func layoutHints(nodes []*node) {
-	w := 0
+	var dw, sw, uw, tw int
 	for _, n := range nodes {
 		if n.kind != "pane" {
-			if dw := lipgloss.Width(deltaText(n)); dw > w {
-				w = dw
+			if w := lipgloss.Width(deltaText(n)); w > dw {
+				dw = w
+			}
+			if w := lipgloss.Width(countText('+', n.staged)); w > sw {
+				sw = w
+			}
+			if w := lipgloss.Width(countText('!', n.unstaged)); w > uw {
+				uw = w
+			}
+			if w := lipgloss.Width(countText('?', n.untrack)); w > tw {
+				tw = w
 			}
 		}
 	}
 	for _, n := range nodes {
-		if n.kind != "pane" {
-			n.deltaW = w
-		}
+		n.deltaW, n.stagedW, n.unstagW, n.untrkW = dw, sw, uw, tw
 	}
 }
-
-// dirtyMark is the uncommitted-changes marker, the shell prompt's red dot.
-// Its slot is always reserved on repo/worktree rows (blank when clean), and
-// on process rows too, so names and ports all end on the same column.
-const dirtyMark = "●"
 
 // deltaText is the ahead/behind hint, in the same shape as the shell prompt:
 // "↑n" commits to push, "↓n" commits to pull, "" when in sync or unknown.
@@ -797,6 +830,32 @@ func deltaText(n *node) string {
 		fmt.Fprintf(&b, "↓%d", n.behind)
 	}
 	return b.String()
+}
+
+// countText is one working-tree counter as plain text, in the same shape
+// as the shell prompt: "+n" staged, "!n" unstaged, "?n" untracked, ""
+// when zero.
+func countText(sym rune, v int) string {
+	if v <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%c%d", sym, v)
+}
+
+// countsText joins a node's non-zero counters ("+n !n ?n"), for -dump and
+// the search corpus-free places that want them unpadded.
+func countsText(n *node) string {
+	var parts []string
+	for _, c := range []string{
+		countText('+', n.staged),
+		countText('!', n.unstaged),
+		countText('?', n.untrack),
+	} {
+		if c != "" {
+			parts = append(parts, c)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func loadJSON(args []string, out any) error {
@@ -1317,12 +1376,15 @@ var (
 
 	// Right-aligned column: listening ports on process rows (teal), the git
 	// branch on repo rows, and the folder on worktree rows whose branch moved (dim).
-	stPorts  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow; not cyan, so ports never read as a delta
+	stPorts  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow; not pink, so ports never read as a delta
 	stBranch = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // dim
-	// stDelta colors the ahead/behind hint like the shell prompt's (bold cyan);
-	// stDirty the uncommitted-changes dot (red, also like the prompt).
-	stDelta = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
-	stDirty = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	// Git hints use the shell prompt's palette (same 256-color codes as the
+	// zsh prompt and the Claude Code statusline): delta pink bold, staged
+	// green, unstaged yellow, untracked dim gray.
+	stDelta     = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
+	stStaged    = lipgloss.NewStyle().Foreground(lipgloss.Color("84"))
+	stUnstaged  = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
+	stUntracked = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 )
 
 // statusDot renders the 1-rune left-gutter indicator for an aggregated agent
@@ -1651,26 +1713,35 @@ type seg struct {
 
 // rightSegs is what a row shows in its right-aligned column. Process rows:
 // their listening ports. Repo and worktree rows, in the shell prompt's
-// order: the ahead/behind hint (when not in sync), then the name, then the
-// dirty dot (when tracked files are modified). The name is the checked-out
-// branch on repo rows (always, so a main checkout sitting on a feature
-// branch is visible at a glance); on worktree rows, whose label already is
-// the branch, it is the folder name, only when the branch is known and the
-// folder is not its slug ("feat/x" -> "feat-x" adds nothing), i.e. the
-// worktree was created for one branch and now has another checked out.
+// order: the name, then the ahead/behind hint (when not in sync), then the
+// working-tree counters ("+n !n ?n", the shell prompt's symbols, each
+// hidden at zero). The name is the checked-out branch on repo rows
+// (always, so a main checkout sitting on a feature branch is visible at a
+// glance); on worktree rows, whose label already is the branch, it is the
+// folder name, only when the branch is known and the folder is not its
+// slug ("feat/x" -> "feat-x" adds nothing), i.e. the worktree was created
+// for one branch and now has another checked out.
 func rightSegs(n *node) []seg {
+	var segs []seg
+	// slot pads text left-aligned to the column's width (so the ↑/+/!/?
+	// symbols align vertically) and emits nothing when no row has the hint.
+	slot := func(text string, w int, st lipgloss.Style) {
+		if w > 0 {
+			segs = append(segs, seg{text + strings.Repeat(" ", w-lipgloss.Width(text)), st})
+		}
+	}
 	if n.kind == "pane" {
 		if t := portsText(n); t != "" {
-			// Same blank dirty slot as repo/worktree rows, so the ports end
-			// on the column the names end on.
-			return []seg{{t, stPorts}, {" ", stDirty}}
+			// Same blank hint slots as repo/worktree rows, so the ports
+			// end on the column the names end on.
+			segs = append(segs, seg{t, stPorts})
+			slot("", n.deltaW, stBranch)
+			slot("", n.stagedW, stBranch)
+			slot("", n.unstagW, stBranch)
+			slot("", n.untrkW, stBranch)
+			return segs
 		}
 		return nil
-	}
-	var segs []seg
-	if n.deltaW > 0 {
-		d := deltaText(n)
-		segs = append(segs, seg{strings.Repeat(" ", n.deltaW-lipgloss.Width(d)) + d, stDelta})
 	}
 	switch {
 	case n.kind == "repo" && n.branch != "":
@@ -1678,11 +1749,10 @@ func rightSegs(n *node) []seg {
 	case n.kind == "worktree" && n.branch != "" && strings.ReplaceAll(n.branch, "/", "-") != n.folder:
 		segs = append(segs, seg{n.folder, stBranch})
 	}
-	if n.dirty {
-		segs = append(segs, seg{dirtyMark, stDirty})
-	} else {
-		segs = append(segs, seg{" ", stDirty})
-	}
+	slot(deltaText(n), n.deltaW, stDelta)
+	slot(countText('+', n.staged), n.stagedW, stStaged)
+	slot(countText('!', n.unstaged), n.unstagW, stUnstaged)
+	slot(countText('?', n.untrack), n.untrkW, stUntracked)
 	return segs
 }
 
@@ -2039,8 +2109,8 @@ func main() {
 			if d := deltaText(n); d != "" {
 				branch += " " + d
 			}
-			if n.dirty {
-				branch += " " + dirtyMark
+			if c := countsText(n); c != "" {
+				branch += " " + c
 			}
 			proc := ""
 			if n.proc != "" {

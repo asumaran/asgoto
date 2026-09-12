@@ -307,15 +307,15 @@ func TestRightText(t *testing.T) {
 		{&node{kind: "repo", label: "app", branch: "main"}, "main"},
 		{&node{kind: "repo", label: "app", branch: "feat/hotfix"}, "feat/hotfix"},
 		{&node{kind: "repo", label: "app"}, ""},
-		{&node{kind: "repo", label: "app", branch: "main", ahead: 2}, "↑2 main"},
-		{&node{kind: "repo", label: "app", branch: "main", ahead: 1, behind: 3}, "↑1↓3 main"},
-		{&node{kind: "repo", label: "app", branch: "main", dirty: true}, "main ●"},
-		{&node{kind: "repo", label: "app", branch: "main", ahead: 2, dirty: true}, "↑2 main ●"},
+		{&node{kind: "repo", label: "app", branch: "main", ahead: 2}, "main ↑2"},
+		{&node{kind: "repo", label: "app", branch: "main", ahead: 1, behind: 3}, "main ↑1↓3"},
+		{&node{kind: "repo", label: "app", branch: "main", unstaged: 1}, "main !1"},
+		{&node{kind: "repo", label: "app", branch: "main", ahead: 2, staged: 1, unstaged: 2, untrack: 3}, "main ↑2 +1 !2 ?3"},
 		{&node{kind: "worktree", label: "feat/x", branch: "feat/x", folder: "feat-x", behind: 1}, "↓1"},
-		{&node{kind: "worktree", label: "feat/x", branch: "feat/x", folder: "feat-x", dirty: true}, "●"},
-		{&node{kind: "worktree", label: "as-foo", branch: "as-foo", folder: "foo", ahead: 4, dirty: true}, "↑4 foo ●"},
+		{&node{kind: "worktree", label: "feat/x", branch: "feat/x", folder: "feat-x", untrack: 2}, "?2"},
+		{&node{kind: "worktree", label: "as-foo", branch: "as-foo", folder: "foo", ahead: 4, staged: 1}, "foo ↑4 +1"},
 		{&node{kind: "pane", ports: []int{3000, 3001}}, ":3000 :3001"},
-		{&node{kind: "pane", ahead: 2, dirty: true}, ""}, // panes never carry git hints
+		{&node{kind: "pane", ahead: 2, unstaged: 1}, ""}, // panes never carry git hints
 	}
 	for _, c := range cases {
 		layoutHints([]*node{c.n}) // the delta column only exists once sized
@@ -325,18 +325,22 @@ func TestRightText(t *testing.T) {
 	}
 }
 
-// TestLayoutHintsAlignsNames covers that the delta column is shared (rows
-// without a delta pad it) and the dirty slot is always reserved, so the
-// names end on the same column whatever each row's hints are.
+// TestLayoutHintsAlignsNames covers that both hint columns are shared (rows
+// without a delta pad the delta column, rows with fewer/no counts pad the
+// counts column, pane rows included), so the names end on the same column
+// whatever each row's hints are.
 func TestLayoutHintsAlignsNames(t *testing.T) {
 	a := &node{kind: "repo", label: "a", branch: "main", ahead: 12, behind: 3}
-	b := &node{kind: "repo", label: "b", branch: "main", dirty: true}
+	b := &node{kind: "repo", label: "b", branch: "main", staged: 1, unstaged: 2}
 	c := &node{kind: "worktree", label: "feat/x", branch: "feat/x", folder: "x-old"}
 	p := &node{kind: "pane", ports: []int{3000}}
 	nodes := []*node{a, b, c, p}
 	layoutHints(nodes)
-	if a.deltaW != 5 || b.deltaW != 5 || c.deltaW != 5 || p.deltaW != 0 {
-		t.Fatalf("deltaW: a=%d b=%d c=%d pane=%d, want 5/5/5/0", a.deltaW, b.deltaW, c.deltaW, p.deltaW)
+	if a.deltaW != 5 || b.deltaW != 5 || c.deltaW != 5 || p.deltaW != 5 {
+		t.Fatalf("deltaW: a=%d b=%d c=%d pane=%d, want 5 everywhere", a.deltaW, b.deltaW, c.deltaW, p.deltaW)
+	}
+	if a.stagedW != 2 || a.unstagW != 2 || a.untrkW != 0 {
+		t.Fatalf("count widths: staged=%d unstaged=%d untracked=%d, want 2/2/0", a.stagedW, a.unstagW, a.untrkW)
 	}
 	join := func(n *node) string {
 		segs := rightSegs(n)
@@ -346,17 +350,42 @@ func TestLayoutHintsAlignsNames(t *testing.T) {
 		}
 		return strings.Join(parts, " ")
 	}
-	if got := join(a); got != "↑12↓3 main  " {
+	if got := join(a); got != "main ↑12↓3      " {
 		t.Errorf("a: %q", got)
 	}
-	if got := join(b); got != "      main ●" {
+	if got := join(b); got != "main       +1 !2" {
 		t.Errorf("b: %q", got)
 	}
-	if got := join(c); got != "      x-old  " {
+	if got := join(c); got != "x-old            " {
 		t.Errorf("c: %q", got)
 	}
-	if got := join(p); got != ":3000  " {
-		t.Errorf("pane: %q, want the ports followed by the blank dirty slot", got)
+	if got := join(p); got != ":3000            " {
+		t.Errorf("pane: %q, want the ports followed by the blank hint slots", got)
+	}
+}
+
+// TestLayoutHintsAlignsCounters covers that each working-tree counter gets
+// its own column: a row's "?1" pads to another row's "?10" so the symbols
+// stack vertically, and a missing counter leaves its slot blank instead of
+// shifting the following ones.
+func TestLayoutHintsAlignsCounters(t *testing.T) {
+	a := &node{kind: "repo", label: "a", branch: "main", staged: 1, unstaged: 4, untrack: 1}
+	b := &node{kind: "repo", label: "b", branch: "main", untrack: 10}
+	nodes := []*node{a, b}
+	layoutHints(nodes)
+	join := func(n *node) string {
+		segs := rightSegs(n)
+		parts := make([]string, len(segs))
+		for i, s := range segs {
+			parts[i] = s.text
+		}
+		return strings.Join(parts, " ")
+	}
+	if got := join(a); got != "main +1 !4 ?1 " {
+		t.Errorf("a: %q", got)
+	}
+	if got := join(b); got != "main       ?10" {
+		t.Errorf("b: %q", got)
 	}
 }
 
@@ -383,15 +412,23 @@ func TestRightColumn(t *testing.T) {
 	}
 }
 
-func TestParseDelta(t *testing.T) {
-	if d, ok := parseDelta("3\t1\n"); !ok || d.Behind != 3 || d.Ahead != 1 {
-		t.Errorf("parse: got %+v ok=%v", d, ok)
+func TestParseStatus(t *testing.T) {
+	out := "## main...origin/main [ahead 1, behind 3]\n M unstaged.go\nM  staged.go\nMM both.go\n?? new.go\n"
+	d, ok := parseStatus(out)
+	if !ok || d.Ahead != 1 || d.Behind != 3 {
+		t.Errorf("delta: got %+v ok=%v", d, ok)
 	}
-	if _, ok := parseDelta(""); ok {
+	if d.Staged != 2 || d.Unstaged != 2 || d.Untracked != 1 {
+		t.Errorf("counts: got %+v, want staged=2 unstaged=2 untracked=1", d)
+	}
+	if d, ok := parseStatus("## main...origin/main\n"); !ok || d != (gitDelta{}) {
+		t.Errorf("clean in-sync checkout: got %+v ok=%v", d, ok)
+	}
+	if _, ok := parseStatus(""); ok {
 		t.Error("empty output should not parse")
 	}
-	if _, ok := parseDelta("x\ty"); ok {
-		t.Error("non-numeric output should not parse")
+	if _, ok := parseStatus("not a status header\n"); ok {
+		t.Error("output without the ## header should not parse")
 	}
 	n := &node{ahead: 2, behind: 1}
 	if got := deltaText(n); got != "↑2↓1" {
@@ -399,6 +436,12 @@ func TestParseDelta(t *testing.T) {
 	}
 	if got := deltaText(&node{}); got != "" {
 		t.Errorf("deltaText in sync: got %q", got)
+	}
+	if got := countsText(&node{staged: 1, unstaged: 2, untrack: 3}); got != "+1 !2 ?3" {
+		t.Errorf("countsText: got %q", got)
+	}
+	if got := countsText(&node{}); got != "" {
+		t.Errorf("countsText clean: got %q", got)
 	}
 }
 
@@ -408,9 +451,9 @@ func TestParseDelta(t *testing.T) {
 func TestAnnotateDeltasByCheckout(t *testing.T) {
 	a := &node{kind: "repo", wsID: "w1", checkout: "/r/a"}
 	b := &node{kind: "worktree", wsID: "w2", checkout: "/r/b", ahead: 9}
-	annotateDeltas([]*node{a, b}, map[string]gitDelta{"/r/a": {Ahead: 2, Dirty: true}})
-	if a.ahead != 2 || !a.dirty {
-		t.Errorf("a: ahead=%d dirty=%v, want 2/true", a.ahead, a.dirty)
+	annotateDeltas([]*node{a, b}, map[string]gitDelta{"/r/a": {Ahead: 2, Unstaged: 1}})
+	if a.ahead != 2 || a.unstaged != 1 {
+		t.Errorf("a: ahead=%d unstaged=%d, want 2/1", a.ahead, a.unstaged)
 	}
 	if b.ahead != 9 {
 		t.Errorf("b: ahead=%d, want the previous 9 kept", b.ahead)

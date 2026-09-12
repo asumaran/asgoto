@@ -97,15 +97,16 @@ Type to fuzzy-search · `↑↓`/`ctrl-n/p` move · `enter` select ·
   reads `as-foo-bar-test  foo`. A detached HEAD falls back to the folder.
   Workspaces herdr reports no worktree metadata for resolve their checkout
   from the first pane's cwd, so they still get a branch. The right column of
-  repo and worktree rows follows the shell prompt's shape: the ahead/behind
-  hint (`↑2` to push, `↓1` to pull, nothing when in sync or without
-  upstream), then the name, then a red `●` when tracked files are modified
-  (untracked files are ignored, like the prompt). Both hint slots keep a
-  fixed width (the delta column as wide as the widest delta, the dot always
-  reserved) so the names line up on one column. Both hints are cached per
-  checkout in `prcache.json` (stale-while-revalidate, like the PRs): the last
-  known values paint on open, already sized, and git revalidates them right
-  after (one `git rev-list` and one `git status --porcelain -uno` per
+  repo and worktree rows follows the shell prompt's shape: the name, then
+  the ahead/behind hint (`↑2` to push, `↓1` to pull, nothing when in sync
+  or without upstream), then the working-tree counters (`+n` staged, `!n`
+  unstaged, `?n` untracked, each hidden at zero), with the prompt's order
+  and colors. Each hint keeps its own fixed-width column (as wide as the
+  widest value of any row, absent when no row has it) so the names line up
+  on one column and every counter aligns with its own kind. Both hints
+  are cached per checkout in `prcache.json` (stale-while-revalidate, like
+  the PRs): the last known values paint on open, already sized, and git
+  revalidates them right after (one `git status --porcelain=v1 -b` per
   checkout, a few at a time), correcting the column if anything changed.
   `git status` on a large repo costs ~1s of CPU, which `core.fsmonitor=true`
   would remove. The column keeps a 1-column margin off the popup edge.
