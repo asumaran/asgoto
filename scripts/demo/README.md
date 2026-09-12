@@ -8,6 +8,10 @@ herdr-demo record            # from the repo root; writes docs/demo.gif
 herdr-demo doctor            # check the toolchain first
 ```
 
+`scripts/release.sh` runs the recording automatically on every release (after
+syncing the manifest version, so the popup shows the released version) and
+commits the refreshed GIF with the release; `--no-demo` skips it.
+
 - `scenario.sh` — what the demo session looks like: the isolated herdr
   session (`gotodemo`), the personal repos/worktrees it is populated with,
   the bottom splits, a dev server (`npm run dev` in the shopnest worktree

@@ -12,10 +12,16 @@
 #
 # The CHANGELOG entry and the GitHub release notes are generated automatically
 # from the commit subjects since the previous tag — nothing to write by hand.
+# The README demo GIF (docs/demo.gif) is re-recorded with herdr-demokit's
+# `herdr-demo record` so it always shows the released UI (the manifest version
+# is synced first, so the recorded popup carries the new version); the
+# refreshed GIF rides the release commit. `--no-demo` skips the recording
+# when the demo toolchain/environment is unavailable.
 #
 # Usage:
 #   scripts/release.sh 0.2.0            # release version 0.2.0
 #   scripts/release.sh 0.2.0 --no-push  # do everything locally, skip push
+#   scripts/release.sh 0.2.0 --no-demo  # skip re-recording docs/demo.gif
 #
 set -euo pipefail
 
@@ -23,11 +29,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 DO_PUSH=true
+DO_DEMO=true
 VERSION=""
 for arg in "$@"; do
   case "$arg" in
     --no-push) DO_PUSH=false ;;
-    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --no-demo) DO_DEMO=false ;;
+    -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)        echo "unknown argument: $arg" >&2; exit 2 ;;
     *)         VERSION="$arg" ;;
   esac
@@ -61,6 +69,34 @@ echo "==> go build ./..."
 go build ./...
 echo "==> go test ./..."
 go test ./...
+
+# --- sync manifest + re-record the README demo GIF --------------------------
+# The manifest version is synced before recording so demo_build stamps the
+# popup with the version being released, not the previous one.
+sed -i '' -E "s/^version = \".*\"/version = \"${VERSION}\"/" herdr-plugin.toml
+
+if $DO_DEMO; then
+  demo_bin="${HERDR_DEMO_BIN:-}"
+  if [ -z "$demo_bin" ]; then
+    demo_bin="$(command -v herdr-demo || true)"
+  fi
+  if [ -z "$demo_bin" ] && [ -x "$HOME/Developer/herdr-demokit/bin/herdr-demo" ]; then
+    demo_bin="$HOME/Developer/herdr-demokit/bin/herdr-demo"
+  fi
+  if [ -z "$demo_bin" ]; then
+    git checkout -- herdr-plugin.toml
+    echo "error: herdr-demo not found (herdr-demokit); install it, set HERDR_DEMO_BIN, or pass --no-demo." >&2
+    exit 1
+  fi
+  echo "==> Re-recording docs/demo.gif (${demo_bin})..."
+  if ! "$demo_bin" record; then
+    git checkout -- herdr-plugin.toml docs/demo.gif
+    echo "error: demo recording failed; nothing committed. Fix the demo environment or pass --no-demo." >&2
+    exit 1
+  fi
+else
+  echo "==> Skipping demo GIF re-recording (--no-demo)."
+fi
 
 # --- generate changelog + release notes -------------------------------------
 prev_tag="$(git tag --list 'v*' --sort=-version:refname | head -n1 || true)"
@@ -98,11 +134,9 @@ if [ -n "$prev_tag" ] && [ -n "$repo_slug" ]; then
     "$repo_slug" "$prev_tag" "$tag" >> "$notes_file"
 fi
 
-# Keep the plugin manifest version in sync with the release tag.
-sed -i '' -E "s/^version = \".*\"/version = \"${VERSION}\"/" herdr-plugin.toml
-
 # --- apply ------------------------------------------------------------------
-git add CHANGELOG.md herdr-plugin.toml
+# docs/demo.gif rides the release commit when the recording refreshed it.
+git add CHANGELOG.md herdr-plugin.toml docs/demo.gif
 git commit -m "chore(release): ${tag}"
 # -m so the tag works non-interactively when tag.gpgsign forces an annotated
 # (signed) tag, which requires a message.

@@ -88,10 +88,16 @@ command = "asumaran.goto.open"
 ## Releasing
 
 `scripts/release.sh <X.Y.Z>` cuts and publishes a release. It gates on a clean
-tree + green `go vet`/`go build`/`go test`, generates the `CHANGELOG.md` entry
-and GitHub release notes from commit subjects since the last tag, syncs
-`version` in `herdr-plugin.toml` to the tag, commits (`chore(release):
-vX.Y.Z`), tags, pushes, and publishes the GitHub release. CI
+tree + green `go vet`/`go build`/`go test`, syncs `version` in
+`herdr-plugin.toml` to the tag, re-records the README demo GIF
+(`docs/demo.gif`) with `herdr-demo record` so it always shows the released UI
+(the manifest sync happens first so the recorded popup carries the new
+version; resolved via `HERDR_DEMO_BIN`, PATH, then
+`~/Developer/herdr-demokit/bin`; `--no-demo` skips it and a failed recording
+aborts the release before anything is committed), generates the
+`CHANGELOG.md` entry and GitHub release notes from commit subjects since the
+last tag, commits (`chore(release): vX.Y.Z`, the refreshed GIF included),
+tags, pushes, and publishes the GitHub release. CI
 (`.github/workflows/release.yml`) then builds the binary (stamping the version
 from the tag) and attaches `goto-darwin-arm64` — the asset `fetch-binary.sh`
 downloads on plugin installs, so it must keep being published.
