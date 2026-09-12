@@ -1,3 +1,9 @@
+## v0.11.0 (2026-09-12)
+
+* chore(scripts): re-record the demo GIF on every release (5f8d2c5)
+* feat(tui): match git hints to the shell prompt (c07171b)
+* chore(plugin): raise popup height to 90% (2c2c567)
+
 ## v0.10.1 (2026-09-11)
 
 * chore(demo): refresh the README GIF with yellow ports and aligned columns (7e44893)
