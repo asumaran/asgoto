@@ -73,6 +73,17 @@ type paneResp struct {
 	} `json:"result"`
 }
 
+// agentResp is `agent list`, read only for state_change_seq: `pane list` does
+// not carry it, and the priority order needs it as the recency tiebreaker.
+type agentResp struct {
+	Result struct {
+		Agents []struct {
+			PaneID string `json:"pane_id"`
+			Seq    uint64 `json:"state_change_seq"`
+		} `json:"agents"`
+	} `json:"result"`
+}
+
 // ---- tree ----
 
 type node struct {
@@ -98,6 +109,8 @@ type node struct {
 	wsID     string // workspace to focus (repo/worktree, and a pane's workspace)
 	paneID   string // pane to focus
 	status   string // aggregated agent status (see statusDot); drives the gutter dot
+	seq      uint64 // herdr's state_change_seq of the agent behind status (aggregated like it); priority-order tiebreaker
+	ord      int    // position among its siblings as built (see buildTree); the default order, restored when priority sort is off
 	hasAgent bool   // pane hosts a herdr-recognized agent (its process is implied by the leaf/dot)
 	proc     string // pane only: foreground command running in it; such panes are always listed, labelled by the command
 	pids     []int  // pane only: pids of the foreground process group, for the ports lookup
@@ -116,7 +129,8 @@ func herdrBin() string {
 // ---- persisted UI state ----
 
 type persisted struct {
-	ShowPanes bool `json:"show_panes"`
+	ShowPanes    bool `json:"show_panes"`
+	PrioritySort bool `json:"priority_sort"`
 }
 
 func stateFile() string {
@@ -1071,19 +1085,59 @@ func statusRank(s string) int {
 
 // aggregateStatus sets n.status to the highest-priority status among n and its
 // descendants, so a repo/worktree reflects its panes' state even when panes are
-// hidden. Returns the resolved status for the recursion.
+// hidden. n.seq follows the winning status (the most recent change among the
+// panes holding it). Returns the resolved status for the recursion.
 func aggregateStatus(n *node) string {
-	best := n.status
+	best, seq := n.status, n.seq
 	for _, c := range n.children {
-		if s := aggregateStatus(c); statusRank(s) > statusRank(best) {
-			best = s
+		s := aggregateStatus(c)
+		switch {
+		case statusRank(s) > statusRank(best):
+			best, seq = s, c.seq
+		case statusRank(s) == statusRank(best) && c.seq > seq:
+			seq = c.seq
 		}
 	}
-	n.status = best
+	n.status, n.seq = best, seq
 	return best
 }
 
-func buildTree(wss []wsInfo, panes []paneInfo) []*node {
+// sortTree orders every sibling group in place. Off, it restores the built
+// order (node.ord). On, it is herdr's Agents panel "priority" sort
+// (ui.agent_panel_sort) applied per level: highest statusRank first, then the
+// most recent state change, then the built order. A repo's own panes stay
+// above its worktrees either way, as the repo row is the main checkout.
+func sortTree(nodes []*node, byPriority bool) {
+	sort.SliceStable(nodes, func(i, j int) bool {
+		a, b := nodes[i], nodes[j]
+		if (a.kind == "pane") != (b.kind == "pane") {
+			return a.kind == "pane"
+		}
+		if byPriority {
+			if ra, rb := statusRank(a.status), statusRank(b.status); ra != rb {
+				return ra > rb
+			}
+			if a.seq != b.seq {
+				return a.seq > b.seq
+			}
+		}
+		return a.ord < b.ord
+	})
+	for _, n := range nodes {
+		sortTree(n.children, byPriority)
+	}
+}
+
+// stampOrder records each node's built position among its siblings, the
+// order sortTree falls back to.
+func stampOrder(nodes []*node) {
+	for i, n := range nodes {
+		n.ord = i
+		stampOrder(n.children)
+	}
+}
+
+func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 	byWs := map[string][]paneInfo{}
 	for _, p := range panes {
 		byWs[p.WsID] = append(byWs[p.WsID], p)
@@ -1093,7 +1147,12 @@ func buildTree(wss []wsInfo, panes []paneInfo) []*node {
 		var out []*node
 		for _, p := range byWs[wsID] {
 			leaf := paneLeaf(p)
+			var seq uint64
+			if p.Agent != "" { // like paneStatus: shells never weigh on the order
+				seq = seqs[p.ID]
+			}
 			out = append(out, &node{
+				seq:  seq,
 				kind: "pane", label: leaf,
 				wsID: wsID, paneID: p.ID, status: paneStatus(p), hasAgent: p.Agent != "",
 				expanded: true,
@@ -1244,6 +1303,7 @@ func buildTree(wss []wsInfo, panes []paneInfo) []*node {
 	for _, r := range roots {
 		aggregateStatus(r)
 	}
+	stampOrder(roots)
 	return roots
 }
 
@@ -1302,12 +1362,13 @@ type keyMap struct {
 	Down   key.Binding
 	Select key.Binding
 	Toggle key.Binding
+	Sort   key.Binding
 	Cancel key.Binding
 	Filter key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Filter, k.Up, k.Down, k.Select, k.Toggle, k.Cancel}
+	return []key.Binding{k.Filter, k.Up, k.Down, k.Select, k.Toggle, k.Sort, k.Cancel}
 }
 func (k keyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }
 
@@ -1317,6 +1378,7 @@ func defaultKeys() keyMap {
 		Down:   key.NewBinding(key.WithKeys("down", "ctrl+n"), key.WithHelp("↓/^n", "down")),
 		Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		Toggle: key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("^t", "panes")),
+		Sort:   key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("^s", "sort")),
 		Cancel: key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc", "cancel")),
 		Filter: key.NewBinding(key.WithKeys(), key.WithHelp("type", "search")),
 	}
@@ -1345,6 +1407,7 @@ type model struct {
 	rows          []rowItem
 	cursor        int
 	showPanes     bool // panes are hidden by default; ctrl+t toggles them
+	prioritySort  bool // order every level by agent status (see sortTree); ctrl+s toggles it
 	ti            textinput.Model
 	vp            viewport.Model
 	help          help.Model
@@ -1359,6 +1422,10 @@ var (
 	stMatch  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	// stDev colors the "(dev)" marker shown in the prompt for non-release builds.
 	stDev = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
+
+	// Active-order label on the prompt line (see sortLabel).
+	stSortOn  = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
+	stSortOff = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 
 	// Ticket / PR prefix: ticket in teal, PR number colored by state.
 	stTicket   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))   // teal
@@ -1507,6 +1574,20 @@ func promptText() string {
 	return stPrompt.Render("goto (") + stDev.Render("dev") + stPrompt.Render(") ❯ ")
 }
 
+// sortLabel names the active order on the prompt line's right edge: unlike
+// ctrl+t, the list alone does not tell which one is on. Dim for the default
+// order, prompt-colored when priority sort is on.
+func sortLabel(byPriority bool) string {
+	if byPriority {
+		return stSortOn.Render("sort: priority")
+	}
+	return stSortOff.Render("sort: spaces")
+}
+
+// sortLabelW is the widest sortLabel, reserved next to the input so typing
+// never runs under the label.
+const sortLabelW = len("sort: priority")
+
 // refreshMetas rebuilds the ticket / PR-number search corpus, parallel to
 // allNodes. This is what lets a query like "1234" find the row showing
 // "#1234", or a ticket that only came from a PR title. Rebuilt whenever PR
@@ -1529,6 +1610,18 @@ func (m *model) refreshMetas() {
 		}
 		m.lowerMetas = append(m.lowerMetas, meta)
 	}
+}
+
+func (m *model) persisted() persisted {
+	return persisted{ShowPanes: m.showPanes, PrioritySort: m.prioritySort}
+}
+
+// resort applies the current sort mode and rebuilds everything that is
+// parallel to the tree order (allNodes and the three match corpora).
+func (m *model) resort() {
+	sortTree(m.roots, m.prioritySort)
+	m.allNodes, m.lowerLabels, m.lowerBranches = flatten(m.roots)
+	m.refreshMetas()
 }
 
 // kindBonus biases the ranking so repo/worktree names outrank panes on ties,
@@ -1879,6 +1972,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp.Height = 1
 		}
 		m.help.Width = msg.Width
+		// Input stops short of the sort label (2 = cursor cell + a gap).
+		m.ti.Width = msg.Width - lipgloss.Width(m.ti.Prompt) - sortLabelW - rightMargin - 2
+		if m.ti.Width < 1 {
+			m.ti.Width = 1
+		}
 		m.renderContent()
 		return m, nil
 
@@ -1971,7 +2069,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyFilter()
 			m.keepCursorOn(cur)
 			m.renderContent()
-			return m, saveStateCmd(persisted{ShowPanes: m.showPanes})
+			return m, saveStateCmd(m.persisted())
+		case key.Matches(msg, m.keys.Sort):
+			var cur *node
+			if m.cursor >= 0 && m.cursor < len(m.rows) {
+				cur = m.rows[m.cursor].n
+			}
+			m.prioritySort = !m.prioritySort
+			m.resort()
+			m.applyFilter()
+			m.keepCursorOn(cur)
+			m.renderContent()
+			return m, saveStateCmd(m.persisted())
 		}
 
 		var cmd tea.Cmd
@@ -1991,7 +2100,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	return m.ti.View() + "\n" + m.vp.View() + "\n" + m.help.View(m.keys)
+	prompt := m.ti.View()
+	// Right-align the sort label on the prompt line; dropped when the popup
+	// is too narrow to fit it next to the input.
+	label := sortLabel(m.prioritySort)
+	if gap := m.vp.Width - rightMargin - lipgloss.Width(prompt) - lipgloss.Width(label); gap >= 1 {
+		prompt += strings.Repeat(" ", gap) + label
+	}
+	return prompt + "\n" + m.vp.View() + "\n" + m.help.View(m.keys)
 }
 
 // version is the release tag; overridden at build time via
@@ -2015,7 +2131,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "pane list:", err)
 		os.Exit(1)
 	}
-	roots := buildTree(ws.Result.Workspaces, pn.Result.Panes)
+	// Only feeds the priority order's tiebreaker, so a failure (older herdr)
+	// degrades to ordering by status alone.
+	var ag agentResp
+	_ = loadJSON([]string{"agent", "list"}, &ag)
+	seqs := make(map[string]uint64, len(ag.Result.Agents))
+	for _, a := range ag.Result.Agents {
+		seqs[a.PaneID] = a.Seq
+	}
+	state := loadState()
+	roots := buildTree(ws.Result.Workspaces, pn.Result.Panes, seqs)
+	sortTree(roots, state.PrioritySort)
 	allNodes, lowerLabels, lowerBranches := flatten(roots)
 
 	// Annotate PR info from the disk cache (instant), then schedule a gh
@@ -2141,13 +2267,14 @@ func main() {
 		prPending:     prPending,
 		cache:         cache,
 		initCmds:      initCmds,
-		showPanes:     loadState().ShowPanes,
+		showPanes:     state.ShowPanes,
+		prioritySort:  state.PrioritySort,
 		ti:            ti,
 		vp:            viewport.New(80, 20),
 		help:          help.New(),
 		keys:          defaultKeys(),
 	}
-	m.refreshMetas()
+	m.resort()
 	m.applyFilter()
 	m.keepCursorOn(currentWorkspaceNode(ws.Result.Workspaces, allNodes))
 	m.renderContent()

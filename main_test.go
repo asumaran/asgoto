@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestTicketFrom(t *testing.T) {
@@ -482,5 +485,109 @@ func TestPaneFocusRequest(t *testing.T) {
 	want := `{"id":"goto:pane.focus","method":"pane.focus","params":{"pane_id":"w45:pF"}}` + "\n"
 	if string(got) != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestSortTreePriority covers the ctrl+s order: every level sorts by its
+// aggregated agent status (blocked > done > working > idle > none), the most
+// recent state change breaks ties, a repo's own panes stay above its
+// worktrees, and turning it off restores the built order.
+func TestSortTreePriority(t *testing.T) {
+	pane := func(label, status string, seq uint64) *node {
+		return &node{kind: "pane", label: label, status: status, seq: seq, hasAgent: status != ""}
+	}
+	wt := func(label string, panes ...*node) *node {
+		return &node{kind: "worktree", label: label, children: panes}
+	}
+	shell := pane("shell", "", 0)
+	idleWt := wt("idle-wt", pane("claude", "idle", 9))
+	blockedWt := wt("blocked-wt", pane("claude", "working", 50), pane("claude", "blocked", 3))
+	quiet := &node{kind: "repo", label: "quiet", children: []*node{shell, idleWt, blockedWt}}
+	oldDone := &node{kind: "repo", label: "old-done", children: []*node{pane("claude", "done", 5)}}
+	newDone := &node{kind: "repo", label: "new-done", children: []*node{pane("claude", "done", 8)}}
+	empty := &node{kind: "repo", label: "empty"}
+	roots := []*node{empty, oldDone, quiet, newDone}
+	for _, r := range roots {
+		aggregateStatus(r)
+	}
+	stampOrder(roots)
+
+	labels := func(nodes []*node) string {
+		var out []string
+		for _, n := range nodes {
+			out = append(out, n.label)
+		}
+		return strings.Join(out, " ")
+	}
+
+	if quiet.status != "blocked" || quiet.seq != 3 {
+		t.Errorf("aggregate: got %s seq %d, want blocked seq 3 (seq follows the winning status)", quiet.status, quiet.seq)
+	}
+
+	sortTree(roots, true)
+	if got, want := labels(roots), "quiet new-done old-done empty"; got != want {
+		t.Errorf("priority roots: got %q, want %q", got, want)
+	}
+	if got, want := labels(quiet.children), "shell blocked-wt idle-wt"; got != want {
+		t.Errorf("priority children: got %q, want %q (own panes stay above worktrees)", got, want)
+	}
+	if got, want := blockedWt.children[0].status, "blocked"; got != want {
+		t.Errorf("priority panes: first is %q, want %q", got, want)
+	}
+
+	sortTree(roots, false)
+	if got, want := labels(roots), "empty old-done quiet new-done"; got != want {
+		t.Errorf("default roots: got %q, want %q", got, want)
+	}
+	if got, want := labels(quiet.children), "shell idle-wt blocked-wt"; got != want {
+		t.Errorf("default children: got %q, want %q", got, want)
+	}
+}
+
+// TestResortKeepsCorporaParallel covers that toggling the order rebuilds the
+// match corpora with the tree: a stale corpus would make a query hit the
+// wrong row.
+func TestResortKeepsCorporaParallel(t *testing.T) {
+	idle := &node{kind: "repo", label: "alpha", status: "idle", ticket: "FED-1"}
+	blocked := &node{kind: "repo", label: "beta", status: "blocked", ticket: "FED-2"}
+	roots := []*node{idle, blocked}
+	stampOrder(roots)
+
+	m := model{roots: roots, ti: textinput.New(), keys: defaultKeys(), prioritySort: true}
+	m.resort()
+	if m.allNodes[0] != blocked {
+		t.Fatalf("priority order: first node is %q, want beta", m.allNodes[0].label)
+	}
+	m.ti.SetValue("fed-1")
+	m.applyFilter()
+	for _, r := range m.rows {
+		if r.match && r.n != idle {
+			t.Errorf("query fed-1 matched %q, want alpha", r.n.label)
+		}
+	}
+	if len(m.rows) != 1 || m.rows[0].n != idle {
+		t.Errorf("query fed-1: rows %v, want only alpha", m.rows)
+	}
+}
+
+// TestViewSortLabel covers the active-order label: right-aligned on the prompt
+// line, naming the mode, and dropped when the popup is too narrow for it.
+func TestViewSortLabel(t *testing.T) {
+	m := model{ti: textinput.New(), vp: viewport.New(60, 5), help: help.New(), keys: defaultKeys()}
+	m.ti.Prompt = "goto > "
+	m.ti.SetValue("herdr")
+
+	first := func() string { return strings.SplitN(m.View(), "\n", 2)[0] }
+
+	if line := first(); !strings.HasSuffix(line, "sort: spaces") || lipgloss.Width(line) != 60-rightMargin {
+		t.Errorf("default: prompt line %q (width %d), want it to end in the label at column %d", line, lipgloss.Width(line), 60-rightMargin)
+	}
+	m.prioritySort = true
+	if line := first(); !strings.HasSuffix(line, "sort: priority") {
+		t.Errorf("priority: prompt line %q, want it to end in \"sort: priority\"", line)
+	}
+	m.vp.Width = 20
+	if line := first(); strings.Contains(line, "sort:") {
+		t.Errorf("narrow: prompt line %q, want no label", line)
 	}
 }
