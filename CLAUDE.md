@@ -106,7 +106,8 @@ never do it as a side effect. `go build -o goto .` switches back to a dev build.
 
 ## Behaviour / decisions
 
-Full notes in `docs/DESIGN.md`; the user-facing summary is in `README.md`.
+Full notes in `docs/DESIGN.md`; `README.md` only describes what the user sees
+and does (keep implementation detail out of it).
 Non-negotiables that are not obvious from the code:
 
 - Digits are plain search text. The old "1-9 jumps to a numbered repo" mode

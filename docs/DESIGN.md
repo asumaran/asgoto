@@ -1,23 +1,43 @@
 # Design notes
 
 Implementation-level decisions behind the TUI, kept here so `CLAUDE.md` stays
-short. The user-facing summary lives in `README.md` ("Behaviour / decisions");
-this file names the functions, fields and caches involved. Read it before
+short. `README.md` describes what the user sees and does; this file names the functions, fields and caches involved. Read it before
 touching the tree building, the filter, the right column or the caches in
 `main.go`.
 
 
 - Tree = two levels by default: repo (== main checkout) -> worktrees. Panes are
-  hidden by default; `ctrl+t` toggles them, persisted in `state.json`.
+  hidden by default; `ctrl+t` toggles them, persisted in `state.json`
+  (`{"show_panes":bool,"priority_sort":bool}`, under `HERDR_PLUGIN_STATE_DIR`
+  as a plugin, `~/.config/herdr/goto-tui/` standalone).
 - Repos ordered by lowest workspace `number`. Worktrees inside a repo sort
   oldest-first by checkout creation time (directory birth time, which tracks PR
   order in practice), workspace `number` as tiebreaker.
   Grouping key: `worktree.repo_key` (falls back to checkout_path, then a pane's
-  cwd, then workspace id).
+  cwd, then workspace id). Known rough edge: a workspace herdr reports no
+  worktree metadata for may show as its own group.
+- Priority order (`ctrl+s`, `persisted.PrioritySort`): `sortTree` re-sorts
+  every sibling group by (`statusRank` desc, `node.seq` desc, `node.ord`),
+  the same key as herdr's Agents panel `agent_panel_sort = "priority"`, but
+  per tree level instead of a flat agent list, so the filter-with-ancestors
+  and the columns work unchanged. `node.seq` is herdr's `state_change_seq`,
+  read from `agent list` at startup (`pane list` lacks it; a failure leaves
+  every seq at 0 and the order falls back to status alone) and aggregated by
+  `aggregateStatus` along with the status it belongs to. `node.ord`
+  (`stampOrder`, at the end of `buildTree`) is the built order, which is what
+  turning the mode off restores. A repo's own panes always stay above its
+  worktrees. `model.resort` re-flattens after sorting because `allNodes` and
+  the match corpora are parallel to the tree order. The initial cursor is
+  still the focused workspace's row, not the top of the queue. The active
+  order is named by `sortLabel`, right-aligned on the prompt line by `View`
+  (not a line of its own: the no-breadcrumb decision stands); `ti.Width`
+  reserves `sortLabelW` so typing never runs under it, and `View` drops the
+  label when the popup is too narrow.
 - Search: fuzzy with scoring + a small kind bonus (repo +8, worktree +4) so
   repo/worktree names outrank panes. Besides the label, the branch, the Jira
   ticket and the PR number are matched (typing "1234" finds the row showing
-  #1234). Matches keep ancestors visible. Digits are plain search text; the
+  #1234). Matches keep ancestors visible and the cursor jumps to the best
+  one (`selectBestMatch`). Digits are plain search text; the
   old "1-9 jumps to a numbered repo" mode was removed on purpose — do not
   reintroduce it.
 - Process rows: a pane whose foreground process group leader is not the
@@ -65,12 +85,29 @@ touching the tree building, the filter, the right column or the caches in
   (`fetchDeltasCmd`, `deltaMsg`) since they only fill the right column;
   `-dump` runs it synchronously. They are cached per checkout path in
   `prcache.json` (`prCache.Hints`, no freshness gate: always revalidated)
-  so the cached values paint and size the columns from the first frame;
+  so the cached values paint and size the columns from the first frame
+  (`git status` on a large repo costs ~1s of CPU, which `core.fsmonitor=true`
+  removes);
   `deltaMsg` rewrites `Hints` with only the checkouts still listed and
   saves. `savePRCacheCmd` marshals synchronously so the async write never
   races a later mutation of the maps. A `rightMargin` of 1 column keeps the
   column off the popup edge. The breadcrumb line under the prompt was
   removed as redundant with the tree.
+- A constant 2-col gutter (indicator + space) sits left of every row, outside
+  the selection highlight, so content stays aligned whether or not a row is
+  selected.
+- Status indicators (`statusDot`) mirror herdr's `status_icon` in both styles.
+  The style comes from `ui.status_indicators` in herdr's `config.toml`, read
+  once in `main` (`herdrConfigPath` follows herdr's own resolution:
+  `HERDR_CONFIG_PATH`, `$XDG_CONFIG_HOME/herdr`, `~/.config/herdr`). There is
+  no CLI or socket call for config values, hence the file; it is a line scan
+  (`herdrConfigString`) rather than a TOML dependency, and any failure
+  keeps herdr's default, `dots`. Colors are ANSI indexes that follow the
+  terminal theme, except under `theme.name = "dracula"`, where
+  `applyHerdrConfig` swaps in the RGB values of herdr's `Palette::dracula`
+  (red, yellow, teal, green, overlay0). That is the only mirrored theme on
+  purpose (cheapest useful case); mirroring another means copying its five
+  values from herdr's `src/app/state.rs` and keeping them in sync.
 - Workspaces without `worktree` metadata resolve their checkout from the
   first pane's cwd (`gitTopLevel`) so repo rows still get branch + PR data.
 - Initial cursor: the repo/worktree row of the focused workspace
@@ -90,4 +127,7 @@ touching the tree building, the filter, the right column or the caches in
   on screen, and cached in `prcache.json` next to `state.json`
   (stale-while-revalidate; entries fresher than 60s skip the refresh).
   Missing `gh` or non-GitHub remotes degrade silently to no PR info.
-
+- herdr surface goto depends on. Read: `workspace list`, `pane list`,
+  `agent list` (only for `state_change_seq`) and `pane process-info`, all
+  JSON over the CLI, plus `config.toml` for the status indicators. Act:
+  `workspace focus <wsID>` and the socket's `pane.focus` (see above).

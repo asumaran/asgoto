@@ -45,78 +45,87 @@ runtime state (`state.json`, `prcache.json`) lives.
 
 ## Keys
 
-Type to fuzzy-search · `↑↓`/`ctrl-n/p` move · `enter` select ·
-`ctrl+t` toggle panes · `esc` cancel.
+| Key | Action |
+| --- | --- |
+| type | fuzzy search |
+| `↑` `↓`, `ctrl+p` `ctrl+n` | move |
+| `enter` | switch to the selected row |
+| `ctrl+t` | show or hide panes |
+| `ctrl+s` | switch between space order and priority order |
+| `esc`, `ctrl+c` | cancel |
 
-## Behaviour / decisions
+Both toggles are remembered between sessions.
 
-- Tree = two levels by default: repo (== main checkout) -> worktrees. Panes are
-  hidden by default; `ctrl+t` toggles them, and that choice persists in
-  `state.json` (`{"show_panes":bool}`) under `HERDR_PLUGIN_STATE_DIR` when
-  running as a plugin, or `~/.config/herdr/goto-tui/` when run standalone
-  (outside herdr, e.g. for debugging).
-- Repos are ordered by where they first appear in the sidebar (lowest workspace
-  `number`). Worktrees inside a repo sort oldest-first by checkout creation
-  time (directory birth time, which tracks PR order in practice), with the
-  workspace `number` as tiebreaker.
-- Rows are prefixed with the Jira ticket (`KEY-123`, extracted from the branch,
-  then the label, then the PR title as fallback) and the branch's PR number
-  colored by state (open green, draft dim, merged purple, closed red). Columns
-  align per sibling group; rows with neither ticket nor PR get no prefix. PR
-  data comes from one async `gh pr list` per unique GitHub repo, cached in
-  `prcache.json` next to `state.json` (stale-while-revalidate). Missing `gh` or
-  non-GitHub remotes degrade silently to no PR info.
-- Repo grouping key: `worktree.repo_key` (falls back to checkout_path, then a
-  pane's cwd, then workspace id). Workspaces herdr doesn't report worktree
-  metadata for may show as their own group — known rough edge.
-- Search: fuzzy (substring-tolerant) with scoring; a small kind bonus (repo +8,
-  worktree +4) so repo/worktree names outrank panes (typing "h" -> herdr).
-  Besides the label, the branch, the Jira ticket and the PR number are matched
-  (typing "1234" finds the row showing #1234). Matches keep their ancestors
-  visible; cursor jumps to the best match. There used to be a "digits 1-9 jump
-  to a numbered repo" mode; it was removed because it conflicted with searching
-  by PR/ticket number.
-- A pane running a foreground command (`pnpm nx dev app`, `vitest`, ...) is
-  listed under its space as a process row labelled by the command, always
-  visible even while plain panes are hidden; enter focuses that pane. The TCP
-  ports its process tree listens on show right-aligned (`:3000`) and are
-  searchable (typing "3000" finds who holds the port). Process rows are resolved
-  before the first paint (one `pane process-info` per pane, a few ms) so the
-  list never shifts; ports (one `lsof` plus one `ps`) arrive async and only
-  fill the right column. Shells at their prompt and agent panes (already
-  conveyed by the leaf text and the status dot) are unaffected; a herdr
-  without the command, or no `lsof`, degrades silently to no process rows.
-- No breadcrumb line: the tree shows ancestors already. Repo rows are named
-  after the repo and show the checked-out branch dimmed at the right (always,
-  so a main checkout parked on a feature branch is visible at a glance).
-  Worktree rows are named after the branch checked out in them, not the
-  folder: the folder is only the slug of the branch the worktree was created
-  for, and a later `git checkout` leaves it stale. When the folder is not the
-  branch's slug (beyond `/` -> `-`), it shows dimmed at the right and stays
-  searchable, so a worktree created as `foo` and now on `as-foo-bar-test`
-  reads `as-foo-bar-test  foo`. A detached HEAD falls back to the folder.
-  Workspaces herdr reports no worktree metadata for resolve their checkout
-  from the first pane's cwd, so they still get a branch. The right column of
-  repo and worktree rows follows the shell prompt's shape: the name, then
-  the ahead/behind hint (`↑2` to push, `↓1` to pull, nothing when in sync
-  or without upstream), then the working-tree counters (`+n` staged, `!n`
-  unstaged, `?n` untracked, each hidden at zero), with the prompt's order
-  and colors. Each hint keeps its own fixed-width column (as wide as the
-  widest value of any row, absent when no row has it) so the names line up
-  on one column and every counter aligns with its own kind. Both hints
-  are cached per checkout in `prcache.json` (stale-while-revalidate, like
-  the PRs): the last known values paint on open, already sized, and git
-  revalidates them right after (one `git status --porcelain=v1 -b` per
-  checkout, a few at a time), correcting the column if anything changed.
-  `git status` on a large repo costs ~1s of CPU, which `core.fsmonitor=true`
-  would remove. The column keeps a 1-column margin off the popup edge.
-- The cursor starts on the space goto was opened from (the workspace herdr
-  reports as focused), so enter with an empty query is a no-op and the list
-  opens scrolled to where you are.
-- Enter on a repo/worktree -> `workspace focus` (does NOT change which pane is
-  focused inside it; lands where you left it). Enter on a pane -> focus that pane.
-- No autofocus: switching repos must not select the agent pane by default.
-- A constant 2-col gutter keeps content aligned whether or not a row is selected.
+## What it shows
+
+The list is a tree: each repo (its main checkout) with its worktrees under
+it. Panes are hidden until you press `ctrl+t`. The exception is a pane running
+a foreground command (`pnpm nx dev app`, `vitest`, ...). That one is always
+listed, labelled by the command, with the TCP ports it listens on at the right
+(`:3000`).
+
+Repo rows are named after the repo. Worktree rows are named after the branch
+checked out in them, because the folder is only the slug of the branch the
+worktree was created for and goes stale after a `git checkout`. When the
+folder no longer matches the branch it shows dimmed at the right, so a
+worktree created as `foo` and now on `as-foo-bar-test` reads
+`as-foo-bar-test  foo`. A detached HEAD falls back to the folder.
+
+Around each name:
+
+- The left gutter holds the agent status. A repo or worktree row shows the
+  most urgent status among its panes. The glyphs follow herdr's
+  `ui.status_indicators`: `dots` (`●` blocked, working or done, `○` idle, `·`
+  none) or `symbols` (`×` blocked, `◐` working, `✓` done). With herdr's
+  `dracula` theme the colors are that theme's palette; with any other theme
+  they are the terminal's ANSI red, yellow, teal and green.
+- The prefix is the Jira ticket (`KEY-123`, taken from the branch, then the
+  folder, then the PR title) and the branch's PR number colored by state: open
+  green, draft dim, merged purple, closed red.
+- The right column reads like a git shell prompt: the branch (on repo rows),
+  then `↑2` to push and `↓1` to pull, then `+n` staged, `!n`
+  unstaged and `?n` untracked. Anything at zero is hidden.
+
+## Search
+
+Typing filters the tree with fuzzy matching. The query is matched against the
+row name, the branch, the worktree folder, the Jira ticket, the PR number and
+the listening ports, so "1234" finds the row showing #1234 and "3000" finds
+whoever holds that port. Matching rows keep their ancestors visible and the
+cursor jumps to the best match. On ties, repos and worktrees outrank panes,
+so typing "h" lands on herdr.
+
+Digits are plain search text. There is no "press 1-9 to jump to a repo"
+shortcut because it would conflict with searching by PR or ticket number.
+
+## Order
+
+By default repos follow the sidebar's order, and the worktrees inside a repo
+go oldest first by checkout creation time, which tracks PR order in practice.
+
+`ctrl+s` switches to priority order. It is herdr's Agents panel
+`agent_panel_sort = "priority"` applied to every level of the tree: blocked
+first, then done, working, idle, and rows without an agent. Within a status
+the most recent state change goes first. A repo's own panes stay above its
+worktrees. A label at the right of the prompt line shows which order is
+active (`sort: spaces` or `sort: priority`).
+
+## Selecting
+
+The cursor starts on the space goto was opened from, so `enter` on an empty
+query changes nothing. `enter` on a repo or worktree switches to that space
+without changing which pane is focused inside it. You land where you left it,
+and the agent pane is never autofocused. `enter` on a pane focuses that pane.
+
+## Optional tools
+
+PR numbers need `gh` (authenticated) and a GitHub remote. Ports need `lsof`.
+Without them goto still works and leaves those columns out.
+
+The git hints come from one `git status` per checkout, run in the background
+once the list is on screen. The last known values are cached, so they paint
+right away and get corrected if anything changed. On a large repo `git status`
+costs about 1s of CPU, which `core.fsmonitor=true` removes.
 
 ## Develop
 
@@ -127,13 +136,18 @@ go build -o goto .             # local build inside the repo
 go vet ./... && go test ./...
 ```
 
-Single static binary, no runtime deps.
+It is a single static Go binary with no runtime deps: Bubble Tea and bubbles
+(`textinput`, `viewport`, `key`, `help`) for the TUI, `lipgloss` for styling
+and `sahilm/fuzzy` for matching. The tree, the filter that keeps ancestors
+and the grouping are custom. [`docs/DESIGN.md`](docs/DESIGN.md) has the
+implementation notes: tree building, caches, the right column and the herdr
+commands goto depends on.
 
 To run your working copy as the installed plugin, `herdr plugin link
 ~/Developer/herdr-goto` registers it. `plugin link` does **not** run build
-commands, so build the binary yourself first (`go build -o goto .` — build from
-source, don't run `fetch-binary.sh`, which would fetch the released build
-instead of your changes).
+commands, so build the binary yourself first with `go build -o goto .`. Don't
+run `fetch-binary.sh` for this: it would fetch the released build instead of
+your changes.
 
 ## Release
 
@@ -143,20 +157,3 @@ scripts/release.sh 0.2.0       # gate, tag, push, publish the GitHub release; CI
 
 The release asset (`goto-darwin-arm64`) is what `fetch-binary.sh` downloads on
 plugin installs, so every release must keep attaching it.
-
-## Stack
-
-- Bubble Tea (runtime) + bubbles `textinput` / `viewport` / `key` / `help`.
-- `lipgloss` for styling.
-- `sahilm/fuzzy` for fuzzy matching + scoring + matched-char highlighting (the
-  same matcher `bubbles/list` uses). The tree, the filter-that-keeps-ancestors
-  and the grouping are custom (no tree component fits).
-
-## herdr CLI it depends on
-
-- Read: `herdr workspace list`, `herdr pane list` (JSON).
-- Act: `herdr workspace focus <wsID>` (repo/worktree). A pane row is focused
-  with the socket API's `pane.focus` (newline-delimited JSON on
-  `HERDR_SOCKET_PATH`): the CLI's `pane focus` is direction-only and `agent
-  focus <paneID>` rejects shell/process panes since herdr 0.9, which is kept
-  only as the fallback when the socket is unavailable.
