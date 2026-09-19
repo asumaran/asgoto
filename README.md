@@ -49,6 +49,9 @@ runtime state (`state.json`, `prcache.json`) lives.
 | --- | --- |
 | type | fuzzy search |
 | `↑` `↓`, `ctrl+p` `ctrl+n` | move |
+| PgDn/PgUp | move a page |
+| `alt+↑` `alt+↓`, Home/End | top or bottom of the list |
+| `?` while the filter is empty, `f1` | expand the help line into every key (`esc` folds it) |
 | `enter` | switch to the selected row |
 | `ctrl+t` | show or hide panes |
 | `ctrl+s` | switch between space order and priority order |

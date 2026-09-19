@@ -37,6 +37,11 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   score. The same file in every
   tool of the family.
   With `highlight.go` it is the exception to the single file: both are shared.
+- `helpfoot.go` — the help at the foot: the key that expands it, its height
+  and its lines cut to the width. The same file in every tool of the family.
+- `listnav.go` — `listNav`: the keys that move the cursor through a list and
+  where each one takes it, group headers skipped. The same file in every tool
+  of the family.
 - `highlight.go` — `highlight`/`highlightFrom`, `matchOver`, `onSel`,
   `selPad` and the `stSel`/`stMatch` styles: how a match and the selected row
   look. The same file in every tool of the family.
@@ -146,6 +151,20 @@ Non-negotiables that are not obvious from the code:
   so there is none here. The list starts on screen row `listY`, one cell in
   from the left side, which is what the click-to-row math uses. Errors and
   notices take the help line.
+- **Moving through the list** is the same in every tool of the family and
+  comes from `listnav.go` (the same file in each repo): arrows or
+  `ctrl+p`/`ctrl+n` a row, `pgup`/`pgdn` a page, `alt+↑`/`alt+↓` or
+  `home`/`end` the ends. `home`/`end` are taken from the filter input's caret
+  on purpose (`←`/`→` and `ctrl+e` still move it). The preview scrolls with
+  `shift+↑`/`shift+↓` only. The keys are listed in the expanded help.
+- **Help**: the line at the foot shows the tool's own actions, `? help` and the
+  quit keys; `?` expands it into every key in columns and the main section
+  gives way (`helpfoot.go`, the same file in every tool of the family). `?`
+  expands only while the filter is empty, otherwise it is text, like `q`;
+  `f1` always does; `esc` folds the help before it quits. Moving, scrolling
+  and resizing live in the expanded help only, so the folded line stays short
+  enough for a narrow popup. A message (error, notice) takes the help's place
+  on one line.
 - **Filter matches** look the same in every tool of the family and come from
   one place, `highlight.go` (the same file in each repo; it also owns `stSel`
   and `stMatch`): a match is the match color plus an underline on top of the

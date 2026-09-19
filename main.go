@@ -1358,26 +1358,36 @@ func flatten(roots []*node) ([]*node, []string, []string) {
 // ---- key bindings (bubbles/key) ----
 
 type keyMap struct {
-	Up     key.Binding
-	Down   key.Binding
+	Nav    listNav
 	Select key.Binding
 	Toggle key.Binding
 	Sort   key.Binding
 	Cancel key.Binding
 	Filter key.Binding
+	Help   key.Binding
 }
 
-// ShortHelp leaves the arrows out: at the popup's 55% width the line would be
-// cut before the quit keys, and moving with the arrows needs no hint.
+// ShortHelp is the folded help line: the tool's own actions, the help and the
+// quit keys. The list's keys (listnav.go) are in the expanded help: at the
+// popup's 55% width the line would be cut before the quit keys.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Filter, k.Select, k.Toggle, k.Sort, k.Cancel}
+	return []key.Binding{k.Filter, k.Select, k.Toggle, k.Sort, k.Help, k.Cancel}
 }
-func (k keyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }
+
+// FullHelp is what `?` expands the help into, one column per group: the
+// filter, the list, the tool's actions, help and quit.
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Filter},
+		{k.Nav.Up, k.Nav.PageUp, k.Nav.Top},
+		{k.Select, k.Toggle, k.Sort},
+		{k.Help, k.Cancel},
+	}
+}
 
 func defaultKeys() keyMap {
 	return keyMap{
-		Up:     key.NewBinding(key.WithKeys("up", "ctrl+p"), key.WithHelp("↑/^p", "up")),
-		Down:   key.NewBinding(key.WithKeys("down", "ctrl+n"), key.WithHelp("↓/^n", "down")),
+		Nav:    defaultListNav(),
 		Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		Toggle: key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("^t", "panes")),
 		Sort:   key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("^s", "sort")),
@@ -1385,6 +1395,7 @@ func defaultKeys() keyMap {
 		// Help-only entry: a binding without keys is disabled and the help
 		// bubble would skip it. Nothing ever matches against it.
 		Filter: key.NewBinding(key.WithKeys("type"), key.WithHelp("type", "filter")),
+		Help:   helpKey,
 	}
 }
 
@@ -2029,8 +2040,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.vp.SetWidth(m.innerW())
-		m.vp.SetHeight(max(1, msg.Height-frameRows-1)) // the frame's own lines + help
 		m.help.SetWidth(max(0, msg.Width-4))
+		m.vp.SetHeight(max(1, msg.Height-frameRows-m.footH())) // the frame's own lines + help
 		// Input inside the frame's padding (2 = cursor cell + a gap).
 		m.ti.SetWidth(max(1, m.innerW()-2-lipgloss.Width(m.ti.Prompt)-2))
 		m.renderContent()
@@ -2121,6 +2132,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		switch {
+		case foldsHelp(msg, m.help):
+			m.toggleHelp() // esc folds the help before it quits
+			return m, nil
+		case isHelpKey(msg, m.ti.Value()):
+			m.toggleHelp()
+			return m, nil
 		case msg.String() == "q" && m.ti.Value() == "":
 			// q quits only while the filter is empty; otherwise it is text.
 			return m, tea.Quit
@@ -2136,15 +2153,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, tea.Quit
-		case key.Matches(msg, m.keys.Up):
-			if m.cursor > 0 {
-				m.cursor--
-				m.renderContent()
-			}
-			return m, nil
-		case key.Matches(msg, m.keys.Down):
-			if m.cursor < len(m.rows)-1 {
-				m.cursor++
+		case m.keys.Nav.matches(msg):
+			if to := m.keys.Nav.move(msg, m.cursor, len(m.rows), m.vp.Height(), nil); to != m.cursor {
+				m.cursor = to
 				m.renderContent()
 			}
 			return m, nil
@@ -2260,10 +2271,25 @@ func (m model) render() string {
 	if total := len(m.rows); total > m.vp.Height() {
 		pos = stDim.Render(strconv.Itoa(min(total, m.vp.YOffset()+m.vp.Height())) + "/" + strconv.Itoa(total))
 	}
-	out = append(out, hline(w, "├", "┤", pos),
-		framed(w, ansi.Truncate(m.help.View(m.keys), max(0, w-4), "…")),
-		hline(w, "╰", "╯", ""))
-	return strings.Join(out, "\n")
+	out = append(out, hline(w, "├", "┤", pos))
+	for _, l := range helpLines(m.help, m.keys, w-4, m.footH()) {
+		out = append(out, framed(w, l))
+	}
+	return strings.Join(append(out, hline(w, "╰", "╯", "")), "\n")
+}
+
+// footH is the height of the help, which takes more lines while `?` has it
+// expanded; the tree keeps at least minBodyH.
+func (m *model) footH() int {
+	return helpHeight(m.help, m.keys, m.height-frameRows-minBodyH)
+}
+
+const minBodyH = 4
+
+func (m *model) toggleHelp() {
+	m.help.ShowAll = !m.help.ShowAll
+	m.vp.SetHeight(max(1, m.height-frameRows-m.footH()))
+	m.renderContent()
 }
 
 // counter is the rows listed out of every row of the current mode, with the
