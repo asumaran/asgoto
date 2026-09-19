@@ -92,8 +92,8 @@ command = "asumaran.asgoto.open"
 - Install: `herdr plugin install asumaran/asgoto` (clones, runs `[[build]]`
   = `scripts/fetch-binary.sh`: release download first, `go build` fallback, so
   a Go toolchain is only needed where no release asset exists).
-- Local dev: `herdr plugin link ~/Developer/asgoto` registers the working
-  copy. `plugin link` does **not** run build commands — run `go build -o asgoto .`
+- Local dev: `herdr plugin link "$PWD"` from the checkout registers the
+  working copy. `plugin link` does **not** run build commands — run `go build -o asgoto .`
   yourself (not `fetch-binary.sh`, which would fetch the released build over
   your local changes); the pane runs `./asgoto` from the plugin root.
 - Runtime state (`state.json`, `prcache.json`) lives in

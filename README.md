@@ -145,8 +145,8 @@ and the grouping are custom. [`docs/DESIGN.md`](docs/DESIGN.md) has the
 implementation notes: tree building, caches, the right column and the herdr
 commands asgoto depends on.
 
-To run your working copy as the installed plugin, `herdr plugin link
-~/Developer/asgoto` registers it. `plugin link` does **not** run build
+To run your working copy as the installed plugin, `herdr plugin link "$PWD"`
+from the checkout registers it. `plugin link` does **not** run build
 commands, so build the binary yourself first with `go build -o asgoto .`. Don't
 run `fetch-binary.sh` for this: it would fetch the released build instead of
 your changes.
