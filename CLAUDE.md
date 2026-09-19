@@ -30,6 +30,13 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
 - `main.go` — the whole program: herdr CLI JSON shapes, tree building, the
   filter-that-keeps-ancestors, rendering, and `main()`. It's intentionally one
   file; keep it that way unless it clearly outgrows it.
+- `match.go` — `findTight`/`tighten`, the fuzzy matcher with one correction: it is
+  greedy (first candidate for each rune, left to right), so a query that
+  occurs in one piece could still match scattered letters before it. When the
+  query occurs whole, that occurrence is the match, for the highlight and the
+  score. The same file in every
+  tool of the family.
+  It is the one exception to the single file, because it is shared.
 - `herdr-plugin.toml` — the herdr plugin manifest (id `asumaran.asgoto`): a
   `[[build]]` (runs `scripts/fetch-binary.sh` on install), the `picker` popup
   pane, and the `open` action that opens it (keybind entry point).

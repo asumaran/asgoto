@@ -32,7 +32,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/sahilm/fuzzy"
 )
 
 // ---- herdr CLI JSON shapes ----
@@ -1732,7 +1731,7 @@ func (m *model) applyFilter() {
 	}
 	hits := map[*node]hit{}
 	if filtering {
-		for _, mt := range fuzzy.Find(q, m.lowerLabels) {
+		for _, mt := range findTight(q, m.lowerLabels) {
 			hits[m.allNodes[mt.Index]] = hit{mt.Score, mt.MatchedIndexes}
 		}
 		// Branches and ticket/PR metadata are matched separately so queries
@@ -1741,7 +1740,7 @@ func (m *model) applyFilter() {
 		// no MatchedIndexes: those indexes point into the branch/meta text,
 		// not the rendered label, so there is nothing to highlight.
 		for _, corpus := range [][]string{m.lowerBranches, m.lowerMetas} {
-			for _, mt := range fuzzy.Find(q, corpus) {
+			for _, mt := range findTight(q, corpus) {
 				n := m.allNodes[mt.Index]
 				if h, ok := hits[n]; !ok || mt.Score > h.score {
 					hits[n] = hit{mt.Score, nil}
@@ -2026,7 +2025,7 @@ func highlight(label string, idx []int, selected bool) string {
 		}
 		run.Reset()
 	}
-	for i, r := range []rune(label) {
+	for i, r := range label { // i is a byte offset, like the matcher's
 		if set[i] != on {
 			flush()
 			on = set[i]
