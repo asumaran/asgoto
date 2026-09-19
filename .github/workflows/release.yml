@@ -8,6 +8,8 @@ name: Attach binaries to Release
 #
 # This file is the same in every plugin of the family: the binary is named
 # after the repository and the targets come from the manifest's `platforms`.
+# It runs on Linux: the binaries are pure Go and cross-compile from anywhere,
+# and Linux runners start sooner and are not capped at five at a time.
 
 on:
   release:
@@ -18,7 +20,8 @@ permissions:
 
 jobs:
   build-and-attach:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,7 +34,8 @@ jobs:
 
       # Quality gate: if vet/test fail, the job fails and no binary is attached,
       # so a broken release is never installable. Second layer behind
-      # scripts/release.sh (which gates locally before tagging).
+      # scripts/release.sh (which gates locally before tagging); CI skips the
+      # release commit, so this is where it is checked.
       - name: Vet
         run: go vet ./...
 
@@ -53,12 +57,18 @@ jobs:
             exit 1
           fi
           mkdir -p dist
+          # The targets share nothing but the sources: build them side by side.
+          pids=""
           for target in $targets; do
             os="${target%/*}"
             arch="${target#*/}"
             GOOS="$os" GOARCH="$arch" go build -trimpath \
               -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-              -o "dist/${name}-${os}-${arch}" .
+              -o "dist/${name}-${os}-${arch}" . &
+            pids="$pids $!"
+          done
+          for pid in $pids; do
+            wait "$pid"
           done
           ls -l dist
 
