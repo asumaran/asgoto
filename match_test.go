@@ -55,10 +55,24 @@ func TestFindTightPicksAWordStartAndKeepsByteOffsets(t *testing.T) {
 func TestFindTightLeavesScatteredMatchesAlone(t *testing.T) {
 	loose := fuzzy.Find("fxlg", []string{"fix login"})
 	got := findTight("fxlg", []string{"fix login"})
-	if len(got) != 1 || got[0].Score != loose[0].Score || len(got[0].MatchedIndexes) != 4 {
-		t.Errorf("got %+v, want %+v untouched", got, loose)
+	if len(got) != 1 || len(got[0].MatchedIndexes) != 4 || got[0].MatchedIndexes[0] != loose[0].MatchedIndexes[0] {
+		t.Errorf("got %+v, want the scattered match %+v", got, loose)
 	}
 	if len(findTight("zzz", []string{"fix login"})) != 0 {
 		t.Errorf("no match stays no match")
+	}
+}
+
+func TestFindTightDoesNotRewardShortStrings(t *testing.T) {
+	corpus := []string{"eshop-2707", "eshop-551", "eshop-2707 structured data for every page"}
+	if loose := fuzzy.Find("eshop", corpus); loose[0].Index != 1 {
+		t.Fatalf("the plain matcher no longer prefers the shorter string: %+v", loose)
+	}
+	ms := findTight("eshop", corpus)
+	if len(ms) != 3 || ms[0].Score != ms[1].Score || ms[1].Score != ms[2].Score {
+		t.Fatalf("the same match scores the same whatever the length: %+v", ms)
+	}
+	if ms[0].Index != 0 || ms[1].Index != 1 || ms[2].Index != 2 {
+		t.Errorf("equal scores keep the order they came in: %+v", ms)
 	}
 }

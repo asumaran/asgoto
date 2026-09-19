@@ -7,6 +7,12 @@ package main
 // scattered match. findTight corrects that: when the query occurs in one
 // piece, that occurrence is the match.
 //
+// It also charges a point for every byte of the string the query did not
+// match, so of two strings that match equally well the shorter one wins. The
+// lists here have an order of their own (newest first) that should decide
+// between equals, not the length of a title: findTight gives that charge
+// back, and a score says only how good the match is.
+//
 // This file is the same in every tool of the family.
 
 import (
@@ -18,13 +24,22 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-// findTight is fuzzy.Find with every match tightened, best score first.
+// findTight is fuzzy.Find with every match tightened and its length charge
+// given back, best score first.
 func findTight(q string, corpus []string) fuzzy.Matches {
 	ms := fuzzy.Find(q, corpus)
 	for i := range ms {
+		ms[i].Score += unmatched(ms[i])
 		tighten(q, &ms[i])
 	}
-	sort.Stable(ms)
+	// equal scores: the order the strings came in, not the one the matcher
+	// left them in before the scores were corrected
+	sort.SliceStable(ms, func(i, j int) bool {
+		if ms[i].Score != ms[j].Score {
+			return ms[i].Score > ms[j].Score
+		}
+		return ms[i].Index < ms[j].Index
+	})
 	return ms
 }
 
@@ -45,16 +60,19 @@ func tighten(q string, mt *fuzzy.Match) {
 	}
 	mt.MatchedIndexes = idx
 	// The matcher scored the tail as if it were the whole string: charge the
-	// skipped head the way it would (a point per rune, five per leading rune
-	// up to fifteen) and take back the first-rune bonus a mid-word start has
-	// not earned.
+	// skipped head the way it would (five per leading rune up to fifteen) and
+	// take back the first-rune bonus a mid-word start has not earned.
 	head := utf8.RuneCountInString(mt.Str[:pos])
-	score := sub[0].Score - head - min(15, 5*head)
+	score := sub[0].Score + unmatched(sub[0]) - min(15, 5*head)
 	if pos > 0 && !atWordStart(mt.Str, pos) {
 		score -= 10
 	}
 	mt.Score = max(mt.Score, score)
 }
+
+// unmatched is what the matcher charged m for its length: a point for every
+// byte of the string that is not part of the match.
+func unmatched(m fuzzy.Match) int { return len(m.Str) - len(m.MatchedIndexes) }
 
 // occurrence is the byte offset of q in s: the first one at the start of a
 // word, else the first one, else -1.
