@@ -1,3 +1,7 @@
+## v0.15.0 (2026-09-19)
+
+* feat: support linux and share the release process (6c3473f)
+
 ## v0.14.0 (2026-09-19)
 
 * refactor: rename herdr-goto to asgoto (6a270c0)
