@@ -52,7 +52,8 @@ runtime state (`state.json`, `prcache.json`) lives.
 | `enter` | switch to the selected row |
 | `ctrl+t` | show or hide panes |
 | `ctrl+s` | switch between space order and priority order |
-| `esc`, `ctrl+c` | cancel |
+| `esc`, `ctrl+c`, `q` with an empty filter | quit |
+| click, mouse wheel | move the cursor (never selects) |
 
 Both toggles are remembered between sessions.
 
@@ -107,8 +108,8 @@ go oldest first by checkout creation time, which tracks PR order in practice.
 `agent_panel_sort = "priority"` applied to every level of the tree: blocked
 first, then done, working, idle, and rows without an agent. Within a status
 the most recent state change goes first. A repo's own panes stay above its
-worktrees. A label at the right of the prompt line shows which order is
-active (`sort: spaces` or `sort: priority`).
+worktrees. The frame's top border shows the rows listed out of the total and which
+order is active (`sort: spaces` or `sort: priority`).
 
 ## Selecting
 

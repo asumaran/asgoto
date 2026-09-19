@@ -10,7 +10,7 @@ to a herdr server or to GitHub.
 
 Usage: scripts/pty-check.py ./goto   (needs python3 + pyte)
 """
-NAME, ROWS, COLS = "goto", 14, 110
+NAME, ROWS, COLS = "goto", 16, 110
 import atexit, fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time
 import pyte
 
@@ -152,14 +152,22 @@ def actions():
     reads = ("workspace list", "pane list", "agent list", "pane process-info")
     return [c for c in open(calls_log).read().splitlines() if not c.startswith(reads)]
 
-def rows(f): return [l for l in f[1:-1] if l.strip()]
+# One frame: top border with the counter and the active order, input, main
+# edge, tree, bottom edge, help, border. There is no context line.
+def rows(f): return [l[1:-1].rstrip() for l in f[3:-3] if l[1:-1].strip()]
+def prompt(f): return f[1].strip("│ ").rstrip()
+def counter(f): return f[0].strip("╭╮─ ")
 
 print("== goto pty driver (%dx%d) ==" % (COLS, ROWS))
 
 # ---------- run 1: tree, cursor on the current space, filter, select ----------
 s = session()
 f = s.start("goto (dev) ❯"); dump("open", f)
-check(f[0].startswith("goto (dev) ❯") and f[0].rstrip().endswith("sort: spaces"), "prompt line with the sort label: %r" % f[0])
+check(prompt(f) == "goto (dev) ❯", "prompt line is clean: %r" % f[1])
+check(f[0].startswith("╭") and f[-1].startswith("╰") and f[2].startswith("├"),
+      "one frame: input right under the top border, no title line")
+check(counter(f) == "3/3 sort: spaces", "counter and active order on the top border: %r" % counter(f))
+check("type filter" in f[-2] and "esc/q quit" in f[-2], "help shows the filter hint and the quit keys: %r" % f[-2])
 check(b"\x1b[?1049h" in s.raw, "program entered the alt screen")
 r = rows(f)
 check(len(r) == 3 and "shop" in r[0] and "fix-checkout-form" in r[1] and "dotfiles" in r[2], "repos and their worktrees form the tree: %r" % r)
@@ -168,6 +176,7 @@ f = s.send(b"checkout", 0.6); dump("filtered", f)
 r = rows(f)
 check(len(r) == 2 and "shop" in r[0] and "▌" in r[1] and "fix-checkout-form" in r[1],
       "the filter keeps the ancestor and lands on the match: %r" % r)
+check(counter(f).startswith("2/3"), "the counter follows the filter: %r" % counter(f))
 s.send(ENTER, 0.3)
 check(s.finish() == 0, "clean exit after enter")
 check(actions() == ["workspace focus w2"], "enter focuses the workspace: %r" % actions())
@@ -183,11 +192,22 @@ s.send(ENTER, 0.3)
 check(s.finish() == 0, "clean exit after enter on a pane")
 check(actions() == ["agent focus w2:p1"], "without a socket the pane is focused through the CLI: %r" % actions())
 
-# ---------- run 3: ctrl+s flips the sort label, esc does nothing ----------
+# ---------- run 3: mouse: a click moves the cursor, the wheel walks it, q quits ----------
+s = session()
+s.start("goto (dev) ❯")
+f = s.send(b"\x1b[<0;6;4M\x1b[<0;6;4m", 0.5)   # SGR press+release on the first tree line
+r = rows(f)
+check("▌" in r[0] and s.proc.poll() is None, "a click moves the cursor without selecting: %r" % r)
+f = s.send(b"\x1b[<65;6;4M", 0.5)               # wheel down
+check("▌" in rows(f)[1], "the wheel walks the cursor: %r" % rows(f))
+os.write(s.master, b"q"); s.pump(0.4)
+check(s.finish() == 0 and actions() == [], "q quits with an empty filter without touching herdr: %r" % actions())
+
+# ---------- run 4: ctrl+s flips the sort label, esc does nothing ----------
 s = session()
 s.start("goto (dev) ❯")
 f = s.send(CTRL_S, 0.5)
-check(f[0].rstrip().endswith("sort: priority"), "ctrl+s switches to the priority order: %r" % f[0])
+check(counter(f).endswith("sort: priority"), "ctrl+s switches to the priority order: %r" % counter(f))
 s.send(CTRL_S, 0.3)   # the choice is persisted; put it back
 os.write(s.master, ESC); s.pump(0.4)
 check(s.finish() == 0 and actions() == [], "esc quits without touching herdr: %r" % actions())

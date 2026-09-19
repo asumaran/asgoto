@@ -124,6 +124,19 @@ Full notes in `docs/DESIGN.md`; `README.md` only describes what the user sees
 and does (keep implementation detail out of it).
 Non-negotiables that are not obvious from the code:
 
+- **Layout**: one rounded frame of sections split by shared edges, the layout
+  asgitlog introduced and every picker of the family follows (the helpers live
+  in `main.go` here): the filter input (the border over it carries the
+  matches/total counter and the active order), the main section (the tree,
+  full width: goto has no preview, so its bottom edge carries the list
+  position), and the help. A context line on top is only for what the rest of
+  the screen cannot say (asgitlog: repo and branch); a title is not context,
+  so there is none here. The list starts on screen row `listY`, one cell in
+  from the left side, which is what the click-to-row math uses. Errors and
+  notices take the help line.
+- **Mouse**: a left click on a row moves the cursor and never selects, so a
+  stray click cannot switch spaces; the wheel walks the cursor a row at a time
+  (there is no preview to scroll). `q` quits only while the filter is empty.
 - Digits are plain search text. The old "1-9 jumps to a numbered repo" mode
   was removed on purpose (it conflicted with searching by PR/ticket number);
   do not reintroduce it.

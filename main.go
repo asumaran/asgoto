@@ -32,6 +32,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -1379,8 +1380,10 @@ func defaultKeys() keyMap {
 		Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		Toggle: key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("^t", "panes")),
 		Sort:   key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("^s", "sort")),
-		Cancel: key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc", "cancel")),
-		Filter: key.NewBinding(key.WithKeys(), key.WithHelp("type", "search")),
+		Cancel: key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc/q", "quit")),
+		// Help-only entry: a binding without keys is disabled and the help
+		// bubble would skip it. Nothing ever matches against it.
+		Filter: key.NewBinding(key.WithKeys("type"), key.WithHelp("type", "filter")),
 	}
 }
 
@@ -1395,6 +1398,7 @@ type rowItem struct {
 }
 
 type model struct {
+	width, height int // terminal size, from the last WindowSizeMsg
 	roots         []*node
 	allNodes      []*node            // flattened, parallel to lowerLabels/lowerBranches/lowerMetas
 	lowerLabels   []string           // lowercased labels for the fuzzy matcher
@@ -1424,6 +1428,9 @@ var (
 	stDev = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
 
 	// Active-order label on the prompt line (see sortLabel).
+	stDim   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	stCount = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+
 	stSortOn  = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
 	stSortOff = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 
@@ -1657,7 +1664,8 @@ func sortLabel(byPriority bool) string {
 	return stSortOff.Render("sort: spaces")
 }
 
-// sortLabelW is the widest sortLabel, reserved next to the input so typing
+// sortLabelW is the widest sortLabel. The label sits on the counter edge of
+// the frame; the constant is kept for the narrow-popup cutoff, where typing
 // never runs under the label.
 const sortLabelW = len("sort: priority")
 
@@ -2039,19 +2047,12 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.vp.SetWidth(msg.Width)
-		vpH := msg.Height - 2 // prompt + help
-		if vpH < 1 {
-			vpH = 1
-		}
-		m.vp.SetHeight(vpH)
-		m.help.SetWidth(msg.Width)
-		// Input stops short of the sort label (2 = cursor cell + a gap).
-		tiW := msg.Width - lipgloss.Width(m.ti.Prompt) - sortLabelW - rightMargin - 2
-		if tiW < 1 {
-			tiW = 1
-		}
-		m.ti.SetWidth(tiW)
+		m.width, m.height = msg.Width, msg.Height
+		m.vp.SetWidth(m.innerW())
+		m.vp.SetHeight(max(1, msg.Height-frameRows-1)) // the frame's own lines + help
+		m.help.SetWidth(max(0, msg.Width-4))
+		// Input inside the frame's padding (2 = cursor cell + a gap).
+		m.ti.SetWidth(max(1, m.innerW()-2-lipgloss.Width(m.ti.Prompt)-2))
 		m.renderContent()
 		return m, nil
 
@@ -2109,8 +2110,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.MouseWheelMsg:
+		// There is no preview to scroll: the wheel walks the cursor.
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			if m.cursor > 0 {
+				m.cursor--
+				m.renderContent()
+			}
+		case tea.MouseWheelDown:
+			if m.cursor < len(m.rows)-1 {
+				m.cursor++
+				m.renderContent()
+			}
+		}
+		return m, nil
+
+	case tea.MouseClickMsg:
+		// A left click on a row moves the cursor; it never selects, so a stray
+		// click cannot switch spaces (same reasoning as gotopr).
+		if msg.Button != tea.MouseLeft || msg.X < 1 || msg.X > m.innerW() ||
+			msg.Y < listY || msg.Y >= listY+m.vp.Height() {
+			return m, nil
+		}
+		if i := msg.Y - listY + m.vp.YOffset(); i >= 0 && i < len(m.rows) && i != m.cursor {
+			m.cursor = i
+			m.renderContent()
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		switch {
+		case msg.String() == "q" && m.ti.Value() == "":
+			// q quits only while the filter is empty; otherwise it is text.
+			return m, tea.Quit
 		case key.Matches(msg, m.keys.Cancel):
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.Select):
@@ -2174,23 +2207,101 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// View declares the frame: alt screen, no mouse mode.
+// View declares the screen: alt screen and cell-motion mouse reports.
 func (m model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
-// render builds the frame text; the tests assert on it.
-func (m model) render() string {
-	prompt := m.ti.View()
-	// Right-align the sort label on the prompt line; dropped when the popup
-	// is too narrow to fit it next to the input.
-	label := sortLabel(m.prioritySort)
-	if gap := m.vp.Width() - rightMargin - lipgloss.Width(prompt) - lipgloss.Width(label); gap >= 1 {
-		prompt += strings.Repeat(" ", gap) + label
+// The screen is one rounded frame of sections split by shared edges, the
+// layout asgitlog introduced and the other pickers share: the filter input
+// (the top border over it carries the matches/total counter and the active
+// order), the tree, and the help. There is no context line: nothing here needs
+// one. goto has no preview either, so the tree takes the whole main section
+// and its bottom edge carries the list position.
+const (
+	mainY     = 2 // the edge over the main section
+	listY     = mainY + 1
+	frameRows = 5 // top border, input, two edges, bottom border
+)
+
+// innerW is the width inside the frame's sides.
+func (m model) innerW() int { return max(20, m.width-2) }
+
+// hline draws a horizontal border w cells wide between the corners l and r,
+// with an optional (already styled) text set into it near the right end.
+func hline(w int, l, r, right string) string {
+	inner := max(0, w-2)
+	if right != "" {
+		right = " " + right + " "
 	}
-	return prompt + "\n" + m.vp.View() + "\n" + m.help.View(m.keys)
+	if 2+ansi.StringWidth(right) > inner {
+		right = ""
+	}
+	fill := inner - ansi.StringWidth(right)
+	tail := 0
+	if right != "" {
+		tail = min(1, fill)
+	}
+	return stDim.Render(l+strings.Repeat("─", fill-tail)) + right + stDim.Render(strings.Repeat("─", tail)+r)
+}
+
+// fit truncates or pads s to exactly w cells.
+func fit(s string, w int) string {
+	s = ansi.Truncate(s, w, "")
+	return s + strings.Repeat(" ", max(0, w-ansi.StringWidth(s)))
+}
+
+// framed sets a line, with a cell of padding, between the frame's sides.
+func framed(w int, l string) string {
+	side := stDim.Render("│")
+	return side + fit(" "+l, w-2) + side
+}
+
+// render stacks the four sections in one frame; the tests assert on it.
+func (m model) render() string {
+	w, side := m.width, stDim.Render("│")
+	out := []string{
+		hline(w, "╭", "╮", m.counter()),
+		framed(w, m.ti.View()),
+		hline(w, "├", "┤", ""),
+	}
+	lines := strings.Split(m.vp.View(), "\n")
+	for i := 0; i < m.vp.Height(); i++ {
+		l := ""
+		if i < len(lines) {
+			l = lines[i]
+		}
+		out = append(out, side+fit(l, m.innerW())+side)
+	}
+	pos := ""
+	if total := len(m.rows); total > m.vp.Height() {
+		pos = stDim.Render(strconv.Itoa(min(total, m.vp.YOffset()+m.vp.Height())) + "/" + strconv.Itoa(total))
+	}
+	out = append(out, hline(w, "├", "┤", pos),
+		framed(w, ansi.Truncate(m.help.View(m.keys), max(0, w-4), "…")),
+		hline(w, "╰", "╯", ""))
+	return strings.Join(out, "\n")
+}
+
+// counter is the rows listed out of every row of the current mode, with the
+// active order next to it; the order is dropped on a popup too narrow for it.
+func (m model) counter() string {
+	total := 0
+	for _, n := range m.allNodes {
+		// Same rule as applyFilter: process rows are always listed, plain
+		// panes only when toggled on.
+		if m.showPanes || n.kind != "pane" || n.proc != "" {
+			total++
+		}
+	}
+	s := stCount.Render(strconv.Itoa(len(m.rows)) + "/" + strconv.Itoa(total))
+	if m.width >= 2*sortLabelW+16 {
+		s += " " + sortLabel(m.prioritySort)
+	}
+	return s
 }
 
 // version is the release tag; overridden at build time via
@@ -2359,6 +2470,8 @@ func main() {
 		showPanes:     state.ShowPanes,
 		prioritySort:  state.PrioritySort,
 		ti:            ti,
+		width:         82, // until the first WindowSizeMsg: the frame around an 80x20 tree
+		height:        26,
 		vp:            viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
 		help:          help.New(),
 		keys:          defaultKeys(),

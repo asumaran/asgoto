@@ -571,26 +571,53 @@ func TestResortKeepsCorporaParallel(t *testing.T) {
 	}
 }
 
-// TestViewSortLabel covers the active-order label: right-aligned on the prompt
-// line, naming the mode, and dropped when the popup is too narrow for it.
+// TestViewSortLabel covers the active-order label: set into the frame's top border, next to
+// the counter, naming the mode, and dropped when the popup is too narrow for it.
 func TestViewSortLabel(t *testing.T) {
-	m := model{ti: textinput.New(), vp: viewport.New(viewport.WithWidth(60), viewport.WithHeight(5)), help: help.New(), keys: defaultKeys()}
+	m := model{ti: textinput.New(), vp: viewport.New(viewport.WithWidth(58), viewport.WithHeight(5)), help: help.New(), keys: defaultKeys(), width: 60, height: 11}
 	m.ti.Prompt = "goto > "
 	m.ti.SetValue("herdr")
 
 	// lipgloss v2 always emits ANSI, so the text is compared stripped.
-	first := func() string { return ansi.Strip(strings.SplitN(m.render(), "\n", 2)[0]) }
+	line := func(y int) string { return strings.Split(ansi.Strip(m.render()), "\n")[y] }
 
-	if line := first(); !strings.HasSuffix(line, "sort: spaces") || lipgloss.Width(line) != 60-rightMargin {
-		t.Errorf("default: prompt line %q (width %d), want it to end in the label at column %d", line, lipgloss.Width(line), 60-rightMargin)
+	if edge := line(0); !strings.HasSuffix(edge, " 0/0 sort: spaces ─╮") {
+		t.Errorf("default: counter edge %q, want it to end in the label", edge)
+	}
+	if prompt := line(1); !strings.HasPrefix(prompt, "│ goto > herdr") || strings.Contains(prompt, "sort:") {
+		t.Errorf("prompt line %q must hold the input only", prompt)
 	}
 	m.prioritySort = true
-	if line := first(); !strings.HasSuffix(line, "sort: priority") {
-		t.Errorf("priority: prompt line %q, want it to end in \"sort: priority\"", line)
+	if edge := line(0); !strings.Contains(edge, "sort: priority") {
+		t.Errorf("priority: counter edge %q", edge)
 	}
-	m.vp.SetWidth(20)
-	if line := first(); strings.Contains(line, "sort:") {
-		t.Errorf("narrow: prompt line %q, want no label", line)
+	m.width = 30
+	m.vp.SetWidth(28)
+	if edge := line(0); strings.Contains(edge, "sort:") || !strings.Contains(edge, "0/0") {
+		t.Errorf("narrow: counter edge %q, want the count without the label", edge)
+	}
+}
+
+// TestFrameGeometry pins the single-frame layout: exactly height lines, each
+// exactly width cells, sections where the click math expects them.
+func TestFrameGeometry(t *testing.T) {
+	m := model{ti: textinput.New(), vp: viewport.New(viewport.WithWidth(98), viewport.WithHeight(5)), help: help.New(), keys: defaultKeys(), width: 100, height: 11}
+	lines := strings.Split(m.render(), "\n")
+	if len(lines) != m.height {
+		t.Errorf("%d lines, want %d", len(lines), m.height)
+	}
+	for i, l := range lines {
+		if w := ansi.StringWidth(l); w != m.width {
+			t.Errorf("line %d is %d cells, want %d: %q", i, w, m.width, ansi.Strip(l))
+		}
+	}
+	plain := strings.Split(ansi.Strip(m.render()), "\n")
+	if !strings.HasPrefix(plain[0], "╭") || !strings.HasPrefix(plain[len(plain)-1], "╰") ||
+		!strings.HasPrefix(plain[mainY], "├") || !strings.HasPrefix(plain[listY], "│") {
+		t.Errorf("frame sections misplaced:\n%s", strings.Join(plain, "\n"))
+	}
+	if help := plain[len(plain)-2]; !strings.Contains(help, "type filter") || !strings.Contains(help, "esc/q quit") {
+		t.Errorf("help line = %q", help)
 	}
 }
 
