@@ -10,10 +10,9 @@ permissions:
 
 jobs:
   test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    # macOS only, like the plugin (platforms = ["macos"]): the pane birth time
+    # comes from syscall.Stat_t.Birthtimespec, which does not exist on Linux.
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
