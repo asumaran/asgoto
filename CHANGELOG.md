@@ -1,3 +1,8 @@
+## v0.13.0 (2026-09-18)
+
+* feat(ui): adopt the family's single-frame layout and the mouse (ea5fd8d)
+* ci: run on macos only (6ed398c)
+
 ## v0.12.0 (2026-09-18)
 
 * ci: run gofmt, vet and tests on push (ac4bfb0)
