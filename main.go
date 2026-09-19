@@ -1368,8 +1368,10 @@ type keyMap struct {
 	Filter key.Binding
 }
 
+// ShortHelp leaves the arrows out: at the popup's 55% width the line would be
+// cut before the quit keys, and moving with the arrows needs no hint.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Filter, k.Up, k.Down, k.Select, k.Toggle, k.Sort, k.Cancel}
+	return []key.Binding{k.Filter, k.Select, k.Toggle, k.Sort, k.Cancel}
 }
 func (k keyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }
 
