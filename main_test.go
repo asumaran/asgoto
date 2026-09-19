@@ -38,7 +38,7 @@ func TestTicketFrom(t *testing.T) {
 func TestGithubSlugFromURL(t *testing.T) {
 	cases := []struct{ url, want string }{
 		{"git@github.com:masmovil/monorepo-front.git", "masmovil/monorepo-front"},
-		{"git@github.com:asumaran/herdr-goto", "asumaran/herdr-goto"},
+		{"git@github.com:asumaran/asgoto", "asumaran/asgoto"},
 		{"ssh://git@github.com/owner/repo.git", "owner/repo"},
 		{"https://github.com/owner/repo.git", "owner/repo"},
 		{"https://github.com/owner/repo", "owner/repo"},
@@ -483,7 +483,7 @@ func TestPaneFocusRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"id":"goto:pane.focus","method":"pane.focus","params":{"pane_id":"w45:pF"}}` + "\n"
+	want := `{"id":"asgoto:pane.focus","method":"pane.focus","params":{"pane_id":"w45:pF"}}` + "\n"
 	if string(got) != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -575,7 +575,7 @@ func TestResortKeepsCorporaParallel(t *testing.T) {
 // the counter, naming the mode, and dropped when the popup is too narrow for it.
 func TestViewSortLabel(t *testing.T) {
 	m := model{ti: textinput.New(), vp: viewport.New(viewport.WithWidth(58), viewport.WithHeight(5)), help: help.New(), keys: defaultKeys(), width: 60, height: 11}
-	m.ti.Prompt = "goto > "
+	m.ti.Prompt = "asgoto > "
 	m.ti.SetValue("herdr")
 
 	// lipgloss v2 always emits ANSI, so the text is compared stripped.
@@ -584,7 +584,7 @@ func TestViewSortLabel(t *testing.T) {
 	if edge := line(0); !strings.HasSuffix(edge, " 0/0 sort: spaces ─╮") {
 		t.Errorf("default: counter edge %q, want it to end in the label", edge)
 	}
-	if prompt := line(1); !strings.HasPrefix(prompt, "│ goto > herdr") || strings.Contains(prompt, "sort:") {
+	if prompt := line(1); !strings.HasPrefix(prompt, "│ asgoto > herdr") || strings.Contains(prompt, "sort:") {
 		t.Errorf("prompt line %q must hold the input only", prompt)
 	}
 	m.prioritySort = true

@@ -1,5 +1,5 @@
-id = "asumaran.goto"
-name = "goto"
+id = "asumaran.asgoto"
+name = "asgoto"
 version = "0.13.1"
 min_herdr_version = "0.7.5"
 description = "Tree-style switcher across herdr repos, worktrees and panes"
@@ -16,17 +16,17 @@ command = ["scripts/fetch-binary.sh"]
 #   [[keys.command]]
 #   key = ["prefix+f", "ctrl+alt+f"]
 #   type = "plugin_action"
-#   command = "asumaran.goto.open"
+#   command = "asumaran.asgoto.open"
 [[actions]]
 id = "open"
-title = "Open goto switcher"
+title = "Open asgoto switcher"
 contexts = ["global"]
 command = ["scripts/open-pane.sh"]
 
 [[panes]]
-id = "goto"
+id = "picker"
 title = "Goto"
 placement = "popup"
 width = "55%"
 height = "90%"
-command = ["./goto"]
+command = ["./asgoto"]

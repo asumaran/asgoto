@@ -1,4 +1,4 @@
-module github.com/asumaran/herdr-goto
+module github.com/asumaran/asgoto
 
 go 1.25.6
 

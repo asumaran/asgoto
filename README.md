@@ -1,18 +1,18 @@
-# herdr-goto
+# asgoto
 
 A custom tree-style switcher across herdr repos, worktrees and panes, used as a
 replacement for herdr's native "goto" navigator. Built because the native goto
 rendered too much and didn't focus its search by default. It runs as a herdr
 plugin pane.
 
-![goto demo: popup over herdr, fuzzy search, process rows with ports, workspace switch](docs/demo.gif)
+![asgoto demo: popup over herdr, fuzzy search, process rows with ports, workspace switch](docs/demo.gif)
 
 ## Install as a herdr plugin
 
 Requires herdr >= 0.7.5 on macOS:
 
 ```bash
-herdr plugin install asumaran/herdr-goto
+herdr plugin install asumaran/asgoto
 ```
 
 The install's build step (`scripts/fetch-binary.sh`) downloads the prebuilt
@@ -24,7 +24,7 @@ install aborts.
 To always compile locally instead of running the prebuilt binary (requires Go):
 
 ```bash
-GOTO_BUILD_FROM_SOURCE=1 herdr plugin install asumaran/herdr-goto
+ASGOTO_BUILD_FROM_SOURCE=1 herdr plugin install asumaran/asgoto
 ```
 
 Then bind a key to the plugin action (herdr has no `plugin_pane` keybind type,
@@ -34,8 +34,8 @@ so the pane is opened through the `open` action) in `~/.config/herdr/config.toml
 [[keys.command]]
 key = ["prefix+f", "ctrl+alt+f"]
 type = "plugin_action"
-command = "asumaran.goto.open"
-description = "goto (bubbletea tree: type to search)"
+command = "asumaran.asgoto.open"
+description = "asgoto (bubbletea tree: type to search)"
 ```
 
 The pane opens as a session-modal `popup` (55% x 50%, sized in the manifest)
@@ -113,7 +113,7 @@ order is active (`sort: spaces` or `sort: priority`).
 
 ## Selecting
 
-The cursor starts on the space goto was opened from, so `enter` on an empty
+The cursor starts on the space asgoto was opened from, so `enter` on an empty
 query changes nothing. `enter` on a repo or worktree switches to that space
 without changing which pane is focused inside it. You land where you left it,
 and the agent pane is never autofocused. `enter` on a pane focuses that pane.
@@ -121,7 +121,7 @@ and the agent pane is never autofocused. `enter` on a pane focuses that pane.
 ## Optional tools
 
 PR numbers need `gh` (authenticated) and a GitHub remote. Ports need `lsof`.
-Without them goto still works and leaves those columns out.
+Without them asgoto still works and leaves those columns out.
 
 The git hints come from one `git status` per checkout, run in the background
 once the list is on screen. The last known values are cached, so they paint
@@ -131,11 +131,11 @@ costs about 1s of CPU, which `core.fsmonitor=true` removes.
 ## Develop
 
 ```bash
-go build -o goto .             # local build inside the repo
-./goto -dump                   # print the tree (no TUI), for debugging without a TTY
-./goto -version                # print the embedded version
+go build -o asgoto .             # local build inside the repo
+./asgoto -dump                   # print the tree (no TUI), for debugging without a TTY
+./asgoto -version                # print the embedded version
 go vet ./... && go test ./...
-scripts/pty-check.py ./goto   # end-to-end TUI check on a pty (python3 + pyte)
+scripts/pty-check.py ./asgoto   # end-to-end TUI check on a pty (python3 + pyte)
 ```
 
 It is a single static Go binary with no runtime deps: Bubble Tea v2 and bubbles v2
@@ -143,11 +143,11 @@ It is a single static Go binary with no runtime deps: Bubble Tea v2 and bubbles 
 and `sahilm/fuzzy` for matching. The tree, the filter that keeps ancestors
 and the grouping are custom. [`docs/DESIGN.md`](docs/DESIGN.md) has the
 implementation notes: tree building, caches, the right column and the herdr
-commands goto depends on.
+commands asgoto depends on.
 
 To run your working copy as the installed plugin, `herdr plugin link
-~/Developer/herdr-goto` registers it. `plugin link` does **not** run build
-commands, so build the binary yourself first with `go build -o goto .`. Don't
+~/Developer/asgoto` registers it. `plugin link` does **not** run build
+commands, so build the binary yourself first with `go build -o asgoto .`. Don't
 run `fetch-binary.sh` for this: it would fetch the released build instead of
 your changes.
 
@@ -157,5 +157,5 @@ your changes.
 scripts/release.sh 0.2.0       # gate, tag, push, publish the GitHub release; CI attaches the binary
 ```
 
-The release asset (`goto-darwin-arm64`) is what `fetch-binary.sh` downloads on
+The release asset (`asgoto-darwin-arm64`) is what `fetch-binary.sh` downloads on
 plugin installs, so every release must keep attaching it.

@@ -1,5 +1,5 @@
 #!/bin/sh
-# fetch-binary.sh — the plugin's [[build]] command: provision ./goto without
+# fetch-binary.sh — the plugin's [[build]] command: provision ./asgoto without
 # requiring a Go toolchain.
 #
 # Downloads the prebuilt binary attached to the GitHub release matching the
@@ -9,9 +9,9 @@
 # fails. Exits non-zero only when neither path works, which aborts the plugin
 # install.
 #
-# Set GOTO_BUILD_FROM_SOURCE=1 to skip the download and always compile locally
+# Set ASGOTO_BUILD_FROM_SOURCE=1 to skip the download and always compile locally
 # (for users who prefer not to run prebuilt binaries):
-#   GOTO_BUILD_FROM_SOURCE=1 herdr plugin install asumaran/herdr-goto
+#   ASGOTO_BUILD_FROM_SOURCE=1 herdr plugin install asumaran/asgoto
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -33,16 +33,16 @@ case "$(uname -m)" in
   *)               ARCH="" ;;
 esac
 
-URL="https://github.com/asumaran/herdr-goto/releases/download/v${VERSION}/goto-${OS}-${ARCH}"
+URL="https://github.com/asumaran/asgoto/releases/download/v${VERSION}/asgoto-${OS}-${ARCH}"
 
-if [ "${GOTO_BUILD_FROM_SOURCE:-0}" = "1" ]; then
-  echo "fetch-binary: GOTO_BUILD_FROM_SOURCE=1, skipping release download"
+if [ "${ASGOTO_BUILD_FROM_SOURCE:-0}" = "1" ]; then
+  echo "fetch-binary: ASGOTO_BUILD_FROM_SOURCE=1, skipping release download"
 elif [ -n "$OS" ] && [ -n "$ARCH" ] && command -v curl >/dev/null 2>&1; then
   tmp="$(mktemp)"
   if curl -fsSL --retry 2 -o "$tmp" "$URL"; then
     chmod +x "$tmp"
-    mv "$tmp" goto
-    echo "fetch-binary: installed goto-${OS}-${ARCH} from release v${VERSION}"
+    mv "$tmp" asgoto
+    echo "fetch-binary: installed asgoto-${OS}-${ARCH} from release v${VERSION}"
     exit 0
   fi
   rm -f "$tmp"
@@ -50,8 +50,8 @@ elif [ -n "$OS" ] && [ -n "$ARCH" ] && command -v curl >/dev/null 2>&1; then
 fi
 
 if command -v go >/dev/null 2>&1; then
-  go build -ldflags "-X main.version=v${VERSION}-source" -o goto .
-  echo "fetch-binary: built goto from source (v${VERSION}-source)"
+  go build -ldflags "-X main.version=v${VERSION}-source" -o asgoto .
+  echo "fetch-binary: built asgoto from source (v${VERSION}-source)"
   exit 0
 fi
 

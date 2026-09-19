@@ -1,8 +1,8 @@
 # Compiled binary (built locally or in CI; attached to GitHub Releases as an asset).
-/goto
-/herdr-goto
-goto-darwin-*
-goto-linux-*
+/asgoto
+/asgoto
+asgoto-darwin-*
+asgoto-linux-*
 
 # Release staging
 /dist/

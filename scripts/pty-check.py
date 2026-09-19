@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end TUI check for goto without a real terminal.
+"""End-to-end TUI check for asgoto without a real terminal.
 
 Spawns the binary on a pty, answers the terminal queries bubbletea sends,
 replays keystrokes and asserts on frames rendered with pyte and on what was
@@ -8,9 +8,9 @@ stub (HERDR_BIN_PATH) that serves a synthetic session and logs every call, no
 socket (HERDR_SOCKET_PATH unset) and a `gh` stub first on PATH. It never talks
 to a herdr server or to GitHub.
 
-Usage: scripts/pty-check.py ./goto   (needs python3 + pyte)
+Usage: scripts/pty-check.py ./asgoto   (needs python3 + pyte)
 """
-NAME, ROWS, COLS = "goto", 16, 110
+NAME, ROWS, COLS = "asgoto", 16, 110
 import atexit, fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time
 import pyte
 
@@ -158,12 +158,12 @@ def rows(f): return [l[1:-1].rstrip() for l in f[3:-3] if l[1:-1].strip()]
 def prompt(f): return f[1].strip("│ ").rstrip()
 def counter(f): return f[0].strip("╭╮─ ")
 
-print("== goto pty driver (%dx%d) ==" % (COLS, ROWS))
+print("== asgoto pty driver (%dx%d) ==" % (COLS, ROWS))
 
 # ---------- run 1: tree, cursor on the current space, filter, select ----------
 s = session()
-f = s.start("goto (dev) ❯"); dump("open", f)
-check(prompt(f) == "goto (dev) ❯", "prompt line is clean: %r" % f[1])
+f = s.start("asgoto (dev) ❯"); dump("open", f)
+check(prompt(f) == "asgoto (dev) ❯", "prompt line is clean: %r" % f[1])
 check(f[0].startswith("╭") and f[-1].startswith("╰") and f[2].startswith("├"),
       "one frame: input right under the top border, no title line")
 check(counter(f) == "3/3 sort: spaces", "counter and active order on the top border: %r" % counter(f))
@@ -171,7 +171,7 @@ check("type filter" in f[-2] and "esc/q quit" in f[-2], "help shows the filter h
 check(b"\x1b[?1049h" in s.raw, "program entered the alt screen")
 r = rows(f)
 check(len(r) == 3 and "shop" in r[0] and "fix-checkout-form" in r[1] and "dotfiles" in r[2], "repos and their worktrees form the tree: %r" % r)
-check("▌" in r[2], "the cursor starts on the space goto was opened from: %r" % r[2])
+check("▌" in r[2], "the cursor starts on the space asgoto was opened from: %r" % r[2])
 f = s.send(b"checkout", 0.6); dump("filtered", f)
 r = rows(f)
 check(len(r) == 2 and "shop" in r[0] and "▌" in r[1] and "fix-checkout-form" in r[1],
@@ -183,7 +183,7 @@ check(actions() == ["workspace focus w2"], "enter focuses the workspace: %r" % a
 
 # ---------- run 2: ctrl+t lists panes, enter on one focuses it ----------
 s = session()
-s.start("goto (dev) ❯")
+s.start("asgoto (dev) ❯")
 f = s.send(CTRL_T, 0.6); dump("panes", f)
 r = rows(f)
 check(any("claude" in x and "working" in x for x in r), "ctrl+t lists the agent pane with its status: %r" % r)
@@ -194,7 +194,7 @@ check(actions() == ["agent focus w2:p1"], "without a socket the pane is focused 
 
 # ---------- run 3: mouse: a click moves the cursor, the wheel walks it, q quits ----------
 s = session()
-s.start("goto (dev) ❯")
+s.start("asgoto (dev) ❯")
 f = s.send(b"\x1b[<0;6;4M\x1b[<0;6;4m", 0.5)   # SGR press+release on the first tree line
 r = rows(f)
 check("▌" in r[0] and s.proc.poll() is None, "a click moves the cursor without selecting: %r" % r)
@@ -205,7 +205,7 @@ check(s.finish() == 0 and actions() == [], "q quits with an empty filter without
 
 # ---------- run 4: ctrl+s flips the sort label, esc does nothing ----------
 s = session()
-s.start("goto (dev) ❯")
+s.start("asgoto (dev) ❯")
 f = s.send(CTRL_S, 0.5)
 check(counter(f).endswith("sort: priority"), "ctrl+s switches to the priority order: %r" % counter(f))
 s.send(CTRL_S, 0.3)   # the choice is persisted; put it back

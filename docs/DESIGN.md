@@ -9,7 +9,7 @@ touching the tree building, the filter, the right column or the caches in
 - Tree = two levels by default: repo (== main checkout) -> worktrees. Panes are
   hidden by default; `ctrl+t` toggles them, persisted in `state.json`
   (`{"show_panes":bool,"priority_sort":bool}`, under `HERDR_PLUGIN_STATE_DIR`
-  as a plugin, `~/.config/herdr/goto-tui/` standalone).
+  as a plugin, `~/.config/herdr/asgoto-tui/` standalone).
 - Repos ordered by lowest workspace `number`. Worktrees inside a repo sort
   oldest-first by checkout creation time (directory birth time, which tracks PR
   order in practice), workspace `number` as tiebreaker.
@@ -127,7 +127,7 @@ touching the tree building, the filter, the right column or the caches in
   on screen, and cached in `prcache.json` next to `state.json`
   (stale-while-revalidate; entries fresher than 60s skip the refresh).
   Missing `gh` or non-GitHub remotes degrade silently to no PR info.
-- herdr surface goto depends on. Read: `workspace list`, `pane list`,
+- herdr surface asgoto depends on. Read: `workspace list`, `pane list`,
   `agent list` (only for `state_change_seq`) and `pane process-info`, all
   JSON over the CLI, plus `config.toml` for the status indicators. Act:
   `workspace focus <wsID>` and the socket's `pane.focus` (see above).

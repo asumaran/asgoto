@@ -1,4 +1,4 @@
-// herdr-goto: a small tree-style switcher across repos, worktrees and panes.
+// asgoto: a small tree-style switcher across repos, worktrees and panes.
 //
 // It talks to herdr through its CLI (workspace list / pane list to read,
 // workspace focus to act, plus pane.focus over the socket API). Designed to run inside a herdr pane
@@ -50,7 +50,7 @@ type wsInfo struct {
 	ID       string    `json:"workspace_id"`
 	Label    string    `json:"label"`
 	Number   int       `json:"number"`
-	Focused  bool      `json:"focused"` // the workspace goto was opened from
+	Focused  bool      `json:"focused"` // the workspace asgoto was opened from
 	Worktree *worktree `json:"worktree"`
 }
 
@@ -140,14 +140,14 @@ func stateFile() string {
 	if dir := os.Getenv("HERDR_PLUGIN_STATE_DIR"); dir != "" {
 		return filepath.Join(dir, "state.json")
 	}
-	// Standalone fallback (fixed-path install at ~/.config/herdr/goto-tui).
+	// Standalone fallback (fixed-path install at ~/.config/herdr/asgoto-tui).
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
 		if h, err := os.UserHomeDir(); err == nil {
 			base = filepath.Join(h, ".config")
 		}
 	}
-	return filepath.Join(base, "herdr", "goto-tui", "state.json")
+	return filepath.Join(base, "herdr", "asgoto-tui", "state.json")
 }
 
 func loadState() persisted {
@@ -1308,7 +1308,7 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 	return roots
 }
 
-// currentWorkspaceNode is the repo/worktree row of the workspace goto was
+// currentWorkspaceNode is the repo/worktree row of the workspace asgoto was
 // opened from (herdr reports it as focused), so the cursor starts there and
 // the list opens scrolled to where you are. Nil when none is focused.
 func currentWorkspaceNode(wss []wsInfo, nodes []*node) *node {
@@ -1516,7 +1516,7 @@ var (
 )
 
 // herdrConfigString reads one string value (`table.key`) out of herdr's
-// config.toml. A line scan instead of a TOML dependency: the keys goto needs
+// config.toml. A line scan instead of a TOML dependency: the keys asgoto needs
 // are plain strings, written either under their [table] or as a dotted
 // top-level key. "" when absent.
 func herdrConfigString(config, table, key string) string {
@@ -1647,13 +1647,13 @@ func prPrefix(n *node) string {
 }
 
 // promptText builds the textinput prompt. Release builds (version stamped from a
-// vX.Y.Z tag) show "goto ❯ "; non-release builds (`dev` / `local-<sha>`) insert
+// vX.Y.Z tag) show "asgoto ❯ "; non-release builds (`dev` / `local-<sha>`) insert
 // an orange "(dev)" marker so it's obvious you're not on a published version.
 func promptText() string {
 	if strings.HasPrefix(version, "v") {
-		return stPrompt.Render("goto ❯ ")
+		return stPrompt.Render("asgoto ❯ ")
 	}
-	return stPrompt.Render("goto (") + stDev.Render("dev") + stPrompt.Render(") ❯ ")
+	return stPrompt.Render("asgoto (") + stDev.Render("dev") + stPrompt.Render(") ❯ ")
 }
 
 // sortLabel names the active order on the prompt line's right edge: unlike
@@ -2130,7 +2130,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseClickMsg:
 		// A left click on a row moves the cursor; it never selects, so a stray
-		// click cannot switch spaces (same reasoning as gotopr).
+		// click cannot switch spaces (same reasoning as asgotopr).
 		if msg.Button != tea.MouseLeft || msg.X < 1 || msg.X > m.innerW() ||
 			msg.Y < listY || msg.Y >= listY+m.vp.Height() {
 			return m, nil
@@ -2221,7 +2221,7 @@ func (m model) View() tea.View {
 // layout asgitlog introduced and the other pickers share: the filter input
 // (the top border over it carries the matches/total counter and the active
 // order), the tree, and the help. There is no context line: nothing here needs
-// one. goto has no preview either, so the tree takes the whole main section
+// one. asgoto has no preview either, so the tree takes the whole main section
 // and its bottom edge carries the list position.
 const (
 	mainY     = 2 // the edge over the main section
@@ -2550,7 +2550,7 @@ func paneFocusRequest(paneID string) ([]byte, error) {
 		ID     string            `json:"id"`
 		Method string            `json:"method"`
 		Params map[string]string `json:"params"`
-	}{ID: "goto:pane.focus", Method: "pane.focus", Params: map[string]string{"pane_id": paneID}}
+	}{ID: "asgoto:pane.focus", Method: "pane.focus", Params: map[string]string{"pane_id": paneID}}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, err

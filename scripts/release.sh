@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# release.sh — cut a new herdr-goto release, gated on a clean tree and a green
+# release.sh — cut a new asgoto release, gated on a clean tree and a green
 # vet+build+test.
 #
 # Releases are created from a tag: a GitHub Actions workflow then compiles the
@@ -12,8 +12,8 @@
 #
 # The CHANGELOG entry and the GitHub release notes are generated automatically
 # from the commit subjects since the previous tag — nothing to write by hand.
-# The README demo GIF (docs/demo.gif) is re-recorded with herdr-demokit's
-# `herdr-demo record` so it always shows the released UI (the manifest version
+# The README demo GIF (docs/demo.gif) is re-recorded with asdemokit's
+# `asdemo record` so it always shows the released UI (the manifest version
 # is synced first, so the recorded popup carries the new version); the
 # refreshed GIF rides the release commit. `--no-demo` skips the recording
 # when the demo toolchain/environment is unavailable.
@@ -76,16 +76,16 @@ go test ./...
 sed -i '' -E "s/^version = \".*\"/version = \"${VERSION}\"/" herdr-plugin.toml
 
 if $DO_DEMO; then
-  demo_bin="${HERDR_DEMO_BIN:-}"
+  demo_bin="${ASDEMO_BIN:-}"
   if [ -z "$demo_bin" ]; then
-    demo_bin="$(command -v herdr-demo || true)"
+    demo_bin="$(command -v asdemo || true)"
   fi
-  if [ -z "$demo_bin" ] && [ -x "$HOME/Developer/herdr-demokit/bin/herdr-demo" ]; then
-    demo_bin="$HOME/Developer/herdr-demokit/bin/herdr-demo"
+  if [ -z "$demo_bin" ] && [ -x "$HOME/Developer/asdemokit/bin/asdemo" ]; then
+    demo_bin="$HOME/Developer/asdemokit/bin/asdemo"
   fi
   if [ -z "$demo_bin" ]; then
     git checkout -- herdr-plugin.toml
-    echo "error: herdr-demo not found (herdr-demokit); install it, set HERDR_DEMO_BIN, or pass --no-demo." >&2
+    echo "error: asdemo not found (asdemokit); install it, set ASDEMO_BIN, or pass --no-demo." >&2
     exit 1
   fi
   echo "==> Re-recording docs/demo.gif (${demo_bin})..."
