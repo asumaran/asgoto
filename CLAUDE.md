@@ -59,11 +59,21 @@ go build -o goto .     # local build in the repo
 ./goto -dump           # print the built tree (no TUI) for debugging without a TTY
 ./goto -version        # print the embedded version
 go vet ./... && go test ./...
+scripts/pty-check.py ./goto   # end-to-end TUI check on a pty (python3 + pyte)
 ```
 
 `version` in `main.go` defaults to `"dev"` and is stamped at build time via
 `-ldflags "-X main.version=<tag>"` (CI does this from the release tag;
 `fetch-binary.sh`'s source fallback stamps `v<version>-source`).
+
+## Testing
+
+For end-to-end verification without a TTY, `scripts/pty-check.py ./goto`
+(python3 + `pyte`) spawns the binary on a pty, answers the terminal queries,
+replays keystrokes and asserts on pyte-rendered frames, in a throwaway sandbox
+(a herdr stub as `HERDR_BIN_PATH` serving a synthetic session and logging
+every call, no socket, a `gh` stub first on `PATH`). The v2 renderer repaints with scroll regions, which pyte ignores, so the
+driver forces a full redraw (pty resize + SIGWINCH) before reading a frame.
 
 ## How it's wired into herdr
 

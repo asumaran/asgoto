@@ -134,6 +134,7 @@ go build -o goto .             # local build inside the repo
 ./goto -dump                   # print the tree (no TUI), for debugging without a TTY
 ./goto -version                # print the embedded version
 go vet ./... && go test ./...
+scripts/pty-check.py ./goto   # end-to-end TUI check on a pty (python3 + pyte)
 ```
 
 It is a single static Go binary with no runtime deps: Bubble Tea v2 and bubbles v2
