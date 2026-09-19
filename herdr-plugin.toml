@@ -1,6 +1,6 @@
 id = "asumaran.goto"
 name = "goto"
-version = "0.13.0"
+version = "0.13.1"
 min_herdr_version = "0.7.5"
 description = "Tree-style switcher across herdr repos, worktrees and panes"
 platforms = ["macos"]

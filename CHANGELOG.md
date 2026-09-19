@@ -1,3 +1,7 @@
+## v0.13.1 (2026-09-19)
+
+* fix(ui): fit the quit keys in the help line (f13e7bb)
+
 ## v0.13.0 (2026-09-18)
 
 * feat(ui): adopt the family's single-frame layout and the mouse (ea5fd8d)
