@@ -21,8 +21,12 @@ Each GitHub Release attaches the `goto-darwin-arm64` asset that
 
 - Go (single module `herdr-goto`, see `go.mod`). Single static binary, no
   runtime deps.
-- TUI: Bubble Tea + bubbles (`textinput`, `viewport`, `key`, `help`),
-  `lipgloss` for styling, `sahilm/fuzzy` for fuzzy matching/scoring.
+- TUI: Bubble Tea v2 + bubbles v2 (`textinput`, `viewport`, `key`, `help`),
+  lipgloss v2 for styling, `sahilm/fuzzy` for fuzzy matching/scoring. The charm
+  v2 modules are imported under their canonical `charm.land/<name>/v2` paths.
+  `View()` returns a `tea.View` (the alt screen is declared there, not as a
+  program option) built from `render()`, which is what the tests assert on.
+  lipgloss v2 always emits ANSI, so tests compare `ansi.Strip`ped text.
 - `main.go` — the whole program: herdr CLI JSON shapes, tree building, the
   filter-that-keeps-ancestors, rendering, and `main()`. It's intentionally one
   file; keep it that way unless it clearly outgrows it.

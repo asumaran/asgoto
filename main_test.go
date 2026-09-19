@@ -5,10 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestTicketFrom(t *testing.T) {
@@ -573,11 +574,12 @@ func TestResortKeepsCorporaParallel(t *testing.T) {
 // TestViewSortLabel covers the active-order label: right-aligned on the prompt
 // line, naming the mode, and dropped when the popup is too narrow for it.
 func TestViewSortLabel(t *testing.T) {
-	m := model{ti: textinput.New(), vp: viewport.New(60, 5), help: help.New(), keys: defaultKeys()}
+	m := model{ti: textinput.New(), vp: viewport.New(viewport.WithWidth(60), viewport.WithHeight(5)), help: help.New(), keys: defaultKeys()}
 	m.ti.Prompt = "goto > "
 	m.ti.SetValue("herdr")
 
-	first := func() string { return strings.SplitN(m.View(), "\n", 2)[0] }
+	// lipgloss v2 always emits ANSI, so the text is compared stripped.
+	first := func() string { return ansi.Strip(strings.SplitN(m.render(), "\n", 2)[0]) }
 
 	if line := first(); !strings.HasSuffix(line, "sort: spaces") || lipgloss.Width(line) != 60-rightMargin {
 		t.Errorf("default: prompt line %q (width %d), want it to end in the label at column %d", line, lipgloss.Width(line), 60-rightMargin)
@@ -586,7 +588,7 @@ func TestViewSortLabel(t *testing.T) {
 	if line := first(); !strings.HasSuffix(line, "sort: priority") {
 		t.Errorf("priority: prompt line %q, want it to end in \"sort: priority\"", line)
 	}
-	m.vp.Width = 20
+	m.vp.SetWidth(20)
 	if line := first(); strings.Contains(line, "sort:") {
 		t.Errorf("narrow: prompt line %q, want no label", line)
 	}
@@ -645,7 +647,7 @@ func TestStatusDotStyles(t *testing.T) {
 		statusSymbols = c.symbols
 		var got []string
 		for _, s := range []string{"blocked", "working", "done", "idle", ""} {
-			got = append(got, statusDot(s))
+			got = append(got, ansi.Strip(statusDot(s)))
 		}
 		if g := strings.Join(got, " "); g != c.want {
 			t.Errorf("symbols=%v: got %q, want %q", c.symbols, g, c.want)

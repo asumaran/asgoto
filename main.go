@@ -26,12 +26,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -2011,7 +2011,7 @@ func plain(r rowItem) string {
 func (m *model) renderContent() {
 	var b strings.Builder
 	for i, r := range m.rows {
-		b.WriteString(rowLine(r, i == m.cursor, m.vp.Width))
+		b.WriteString(rowLine(r, i == m.cursor, m.vp.Width()))
 		if i < len(m.rows)-1 {
 			b.WriteString("\n")
 		}
@@ -2021,13 +2021,13 @@ func (m *model) renderContent() {
 }
 
 func (m *model) ensureVisible() {
-	h := m.vp.Height
+	h := m.vp.Height()
 	if h <= 0 {
 		return
 	}
-	if m.cursor < m.vp.YOffset {
+	if m.cursor < m.vp.YOffset() {
 		m.vp.SetYOffset(m.cursor)
-	} else if m.cursor >= m.vp.YOffset+h {
+	} else if m.cursor >= m.vp.YOffset()+h {
 		m.vp.SetYOffset(m.cursor - h + 1)
 	}
 }
@@ -2039,17 +2039,19 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.vp.Width = msg.Width
-		m.vp.Height = msg.Height - 2 // prompt + help
-		if m.vp.Height < 1 {
-			m.vp.Height = 1
+		m.vp.SetWidth(msg.Width)
+		vpH := msg.Height - 2 // prompt + help
+		if vpH < 1 {
+			vpH = 1
 		}
-		m.help.Width = msg.Width
+		m.vp.SetHeight(vpH)
+		m.help.SetWidth(msg.Width)
 		// Input stops short of the sort label (2 = cursor cell + a gap).
-		m.ti.Width = msg.Width - lipgloss.Width(m.ti.Prompt) - sortLabelW - rightMargin - 2
-		if m.ti.Width < 1 {
-			m.ti.Width = 1
+		tiW := msg.Width - lipgloss.Width(m.ti.Prompt) - sortLabelW - rightMargin - 2
+		if tiW < 1 {
+			tiW = 1
 		}
+		m.ti.SetWidth(tiW)
 		m.renderContent()
 		return m, nil
 
@@ -2107,7 +2109,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, m.keys.Cancel):
 			return m, tea.Quit
@@ -2172,12 +2174,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) View() string {
+// View declares the frame: alt screen, no mouse mode.
+func (m model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	return v
+}
+
+// render builds the frame text; the tests assert on it.
+func (m model) render() string {
 	prompt := m.ti.View()
 	// Right-align the sort label on the prompt line; dropped when the popup
 	// is too narrow to fit it next to the input.
 	label := sortLabel(m.prioritySort)
-	if gap := m.vp.Width - rightMargin - lipgloss.Width(prompt) - lipgloss.Width(label); gap >= 1 {
+	if gap := m.vp.Width() - rightMargin - lipgloss.Width(prompt) - lipgloss.Width(label); gap >= 1 {
 		prompt += strings.Repeat(" ", gap) + label
 	}
 	return prompt + "\n" + m.vp.View() + "\n" + m.help.View(m.keys)
@@ -2331,7 +2341,10 @@ func main() {
 
 	ti := textinput.New()
 	ti.Prompt = promptText()
-	ti.PromptStyle = lipgloss.NewStyle() // colors are already baked into the prompt
+	tiStyles := ti.Styles()
+	tiStyles.Focused.Prompt = lipgloss.NewStyle() // colors are already baked into the prompt
+	tiStyles.Blurred.Prompt = lipgloss.NewStyle()
+	ti.SetStyles(tiStyles)
 	ti.Focus()
 
 	m := model{
@@ -2346,7 +2359,7 @@ func main() {
 		showPanes:     state.ShowPanes,
 		prioritySort:  state.PrioritySort,
 		ti:            ti,
-		vp:            viewport.New(80, 20),
+		vp:            viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
 		help:          help.New(),
 		keys:          defaultKeys(),
 	}
@@ -2355,7 +2368,8 @@ func main() {
 	m.keepCursorOn(currentWorkspaceNode(ws.Result.Workspaces, allNodes))
 	m.renderContent()
 
-	res, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	// The alt screen is declared per frame by View().
+	res, err := tea.NewProgram(m).Run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

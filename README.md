@@ -136,8 +136,8 @@ go build -o goto .             # local build inside the repo
 go vet ./... && go test ./...
 ```
 
-It is a single static Go binary with no runtime deps: Bubble Tea and bubbles
-(`textinput`, `viewport`, `key`, `help`) for the TUI, `lipgloss` for styling
+It is a single static Go binary with no runtime deps: Bubble Tea v2 and bubbles v2
+(`textinput`, `viewport`, `key`, `help`) for the TUI, lipgloss v2 for styling
 and `sahilm/fuzzy` for matching. The tree, the filter that keeps ancestors
 and the grouping are custom. [`docs/DESIGN.md`](docs/DESIGN.md) has the
 implementation notes: tree building, caches, the right column and the herdr
