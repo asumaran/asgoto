@@ -23,7 +23,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"charm.land/bubbles/v2/help"
@@ -947,16 +946,17 @@ func gitBranch(path string) string {
 	return "" // detached HEAD
 }
 
-// worktreeCreatedAt returns when the checkout at path was created, using the
-// directory's birth time (darwin). Zero time when the path can't be stat'ed,
-// which sorts those entries first.
+// worktreeCreatedAt returns when the checkout at path was created: the
+// directory's birth time where the platform reports one (birthTime, see
+// birth_darwin.go and birth_other.go), its modification time elsewhere. Zero
+// time when the path can't be stat'ed, which sorts those entries first.
 func worktreeCreatedAt(path string) time.Time {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return time.Time{}
 	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return time.Unix(st.Birthtimespec.Sec, st.Birthtimespec.Nsec)
+	if t, ok := birthTime(fi); ok {
+		return t
 	}
 	return fi.ModTime()
 }

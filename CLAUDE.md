@@ -14,7 +14,7 @@ talks to herdr through its CLI (`workspace list` / `pane list` to read,
 Distributed as a herdr plugin (`herdr plugin install asumaran/asgoto`; the
 manifest's `[[build]]` runs `scripts/fetch-binary.sh`, which downloads the
 release binary matching the manifest version and falls back to `go build`).
-Each GitHub Release attaches the `asgoto-darwin-arm64` asset that
+Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, arm64 and amd64) that
 `fetch-binary.sh` depends on. There is no published library.
 
 ## Stack & layout
@@ -49,7 +49,7 @@ Each GitHub Release attaches the `asgoto-darwin-arm64` asset that
   never the user's default session.
 - `docs/DESIGN.md` — implementation-level design notes (tree building, filter,
   right column, caches). Read it before changing that code.
-- The compiled binary (`goto`, `asgoto-darwin-arm64`) is **never committed**
+- The compiled binary (`asgoto`, `asgoto-<os>-<arch>`) is **never committed**
   (`.gitignore`); it is built locally or in CI.
 
 ## Build & run
@@ -91,7 +91,7 @@ command = "asumaran.asgoto.open"
 
 - Install: `herdr plugin install asumaran/asgoto` (clones, runs `[[build]]`
   = `scripts/fetch-binary.sh`: release download first, `go build` fallback, so
-  a Go toolchain is only needed off `darwin/arm64`).
+  a Go toolchain is only needed where no release asset exists).
 - Local dev: `herdr plugin link ~/Developer/asgoto` registers the working
   copy. `plugin link` does **not** run build commands — run `go build -o asgoto .`
   yourself (not `fetch-binary.sh`, which would fetch the released build over
@@ -105,14 +105,16 @@ command = "asumaran.asgoto.open"
 
 `scripts/release.sh <X.Y.Z>` does everything: gates on a clean tree and green
 `go vet`/`go build`/`go test`, syncs `version` in `herdr-plugin.toml`,
-re-records `docs/demo.gif` with `asdemo record` (`--no-demo` skips it; a
-failed recording aborts before anything is committed), writes the
+with `--demo` re-records `docs/demo.gif` with `asdemo record` (opt-in: it takes
+over a herdr session; a failed recording aborts before anything is committed),
+writes the
 `CHANGELOG.md` entry and release notes from commit subjects, commits
 (`chore(release): vX.Y.Z`), tags, pushes and publishes the GitHub release. CI
-(`.github/workflows/release.yml`) builds `asgoto-darwin-arm64` and attaches it;
-that asset is what `fetch-binary.sh` downloads on installs, so it must keep
-being published. Only `darwin/arm64` is built; other platforms need a matrix
-in `release.yml` (`fetch-binary.sh` already resolves the asset from `uname`).
+(`.github/workflows/release.yml`) builds the platforms the manifest declares (macOS and Linux, arm64 and amd64)
+and attaches them; those assets are what `fetch-binary.sh` downloads on
+installs, so they must keep being published. `release.sh` and `release.yml`
+are the same files in every plugin of the family: they read the repository
+name and the manifest instead of naming the tool.
 
 Releasing never touches this machine's linked plugin. After a release, offer
 to run `scripts/fetch-binary.sh` to install the published build over `./asgoto`;

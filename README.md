@@ -9,7 +9,7 @@ plugin pane.
 
 ## Install as a herdr plugin
 
-Requires herdr >= 0.7.5 on macOS:
+Requires herdr >= 0.7.5 on macOS or Linux:
 
 ```bash
 herdr plugin install asumaran/asgoto
@@ -17,7 +17,7 @@ herdr plugin install asumaran/asgoto
 
 The install's build step (`scripts/fetch-binary.sh`) downloads the prebuilt
 binary from the GitHub release matching the manifest's version, so no Go
-toolchain is needed on `darwin/arm64`. On platforms without a release asset it
+toolchain is needed on macOS or Linux (arm64 and amd64). On platforms without a release asset it
 falls back to `go build` (then Go is required); if neither path works the
 install aborts.
 
@@ -157,5 +157,6 @@ your changes.
 scripts/release.sh 0.2.0       # gate, tag, push, publish the GitHub release; CI attaches the binary
 ```
 
-The release asset (`asgoto-darwin-arm64`) is what `fetch-binary.sh` downloads on
-plugin installs, so every release must keep attaching it.
+The release assets (`asgoto-<os>-<arch>`, macOS and Linux, arm64 and amd64) are
+what `fetch-binary.sh` downloads on plugin installs, so every release must keep
+attaching them.

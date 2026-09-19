@@ -1,5 +1,9 @@
 name: CI
 
+# The same file in every plugin of the family. It runs on the platforms the
+# plugins support, and besides the Go checks it drives the real TUI on a pty
+# (scripts/pty-check.py), which is what says the popup works on Linux too.
+
 on:
   push:
     branches: [main]
@@ -10,9 +14,11 @@ permissions:
 
 jobs:
   test:
-    # macOS only, like the plugin (platforms = ["macos"]): the pane birth time
-    # comes from syscall.Stat_t.Birthtimespec, which does not exist on Linux.
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,3 +46,15 @@ jobs:
 
       - name: Shell syntax
         run: sh -n scripts/fetch-binary.sh scripts/release.sh
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: TUI check on a pty
+        run: |
+          python3 -m pip install --quiet pyte
+          name="${GITHUB_REPOSITORY#*/}"
+          go build -o "$name" .
+          python3 scripts/pty-check.py "./$name"

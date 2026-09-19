@@ -3,7 +3,7 @@ name = "asgoto"
 version = "0.14.0"
 min_herdr_version = "0.7.5"
 description = "Tree-style switcher across herdr repos, worktrees and panes"
-platforms = ["macos"]
+platforms = ["linux", "macos"]
 
 # Hybrid provisioning: download the prebuilt binary from the GitHub release
 # matching `version` above; fall back to `go build` when there is no asset for

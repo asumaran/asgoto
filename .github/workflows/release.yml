@@ -1,10 +1,13 @@
-name: Attach binary to Release
+name: Attach binaries to Release
 
-# Releases are created from a tag (e.g. via scripts/release.sh, which tags and
+# Releases are created from a tag (via scripts/release.sh, which tags and
 # publishes the GitHub release). When a release is published, this workflow
-# compiles the binary, stamps the version from the tag, and uploads it as a
-# release asset so it can be installed with scripts/update-local.sh without a
-# local build step.
+# compiles the binaries, stamps the version from the tag, and uploads them as
+# release assets so plugin installs (scripts/fetch-binary.sh) can download one
+# without a local Go toolchain.
+#
+# This file is the same in every plugin of the family: the binary is named
+# after the repository and the targets come from the manifest's `platforms`.
 
 on:
   release:
@@ -35,16 +38,31 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Build (darwin/arm64)
+      - name: Build the platforms the manifest declares
         env:
-          GOOS: darwin
-          GOARCH: arm64
+          CGO_ENABLED: '0'
         run: |
-          go build -trimpath \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-            -o asgoto-darwin-arm64 .
+          set -eu
+          name="${GITHUB_REPOSITORY#*/}"
+          platforms="$(sed -n 's/^platforms = //p' herdr-plugin.toml)"
+          targets=""
+          case "$platforms" in *macos*) targets="$targets darwin/arm64 darwin/amd64" ;; esac
+          case "$platforms" in *linux*) targets="$targets linux/amd64 linux/arm64" ;; esac
+          if [ -z "$targets" ]; then
+            echo "no known platform in herdr-plugin.toml: ${platforms}" >&2
+            exit 1
+          fi
+          mkdir -p dist
+          for target in $targets; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+              -o "dist/${name}-${os}-${arch}" .
+          done
+          ls -l dist
 
-      - name: Upload binary to release
+      - name: Upload binaries to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" ./asgoto-darwin-arm64 --clobber
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
