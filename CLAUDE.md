@@ -136,6 +136,11 @@ Non-negotiables that are not obvious from the code:
   so there is none here. The list starts on screen row `listY`, one cell in
   from the left side, which is what the click-to-row math uses. Errors and
   notices take the help line.
+- **Filter matches** look the same in every picker of the family, asgitlog's
+  way: the match color plus an underline. The selected row shows them too.
+  Each piece of that row carries the selection's background itself, because
+  nesting a styled match inside one big `stSel.Render` would cut the
+  background at the match's reset.
 - **Mouse**: a left click on a row moves the cursor and never selects, so a
   stray click cannot switch spaces; the wheel walks the cursor a row at a time
   (there is no preview to scroll). `q` quits only while the filter is empty.

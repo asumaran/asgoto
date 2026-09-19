@@ -1425,7 +1425,9 @@ type model struct {
 var (
 	stPrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
 	stSel    = lipgloss.NewStyle().Background(lipgloss.Color("8")).Bold(true)
-	stMatch  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	// a filter match: asgitlog's look, also over the selected row's background
+	stMatch    = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Underline(true)
+	stSelMatch = stSel.Foreground(lipgloss.Color("13")).Underline(true)
 	// stDev colors the "(dev)" marker shown in the prompt for non-release builds.
 	stDev = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
 
@@ -1851,24 +1853,31 @@ func (m *model) selectBestMatch() {
 func rowLine(r rowItem, selected bool, width int) string {
 	indent := strings.Repeat("  ", r.depth)
 	// The status dot sits in its own gutter to the left, outside the selection
-	// highlight (nested ANSI on a background renders inconsistently across
-	// terminals).
+	// highlight.
 	dot := statusDot(r.n.status) + " "
 	if selected {
-		// Plain text inside the highlight. Constant 2-col gutter keeps content
-		// aligned whether or not the row is selected.
-		left := "▌ " + indent + plain(r)
-		content := left + rightColumn(rightSegs(r.n), width-2-rightMargin-lipgloss.Width(left), false)
+		// Plain text inside the highlight, except the filter's matches, which
+		// stay marked where the cursor is. Every piece carries the background
+		// itself: nested ANSI on a background renders inconsistently across
+		// terminals. Constant 2-col gutter keeps content aligned whether or not
+		// the row is selected.
+		var idx []int
+		if r.match {
+			idx = r.idx
+		}
+		left := "▌ " + indent + prPrefixPlain(r.n)
+		leftW := lipgloss.Width(left + r.n.label)
+		right := rightColumn(rightSegs(r.n), width-2-rightMargin-leftW, false)
 		// Pad to the full row width so the highlight spans the line, not just
 		// the text (the gutter takes 2 columns).
-		if pad := width - 2 - lipgloss.Width(content); pad > 0 {
-			content += strings.Repeat(" ", pad)
+		if pad := width - 2 - leftW - lipgloss.Width(right); pad > 0 {
+			right += strings.Repeat(" ", pad)
 		}
-		return dot + stSel.Render(content)
+		return dot + stSel.Render(left) + highlight(r.n.label, idx, true) + stSel.Render(right)
 	}
 	name := r.n.label
 	if r.match {
-		name = highlight(r.n.label, r.idx)
+		name = highlight(r.n.label, r.idx, false)
 	}
 	left := "  " + indent + prPrefix(r.n) + name
 	return dot + left + rightColumn(rightSegs(r.n), width-2-rightMargin-lipgloss.Width(left), true)
@@ -1992,30 +2001,40 @@ func truncate(s string, max int) string {
 	return string(rs[:max-1]) + "…"
 }
 
-// highlight styles the fuzzy-matched characters within a label.
-func highlight(label string, idx []int) string {
-	if len(idx) == 0 {
-		return label
+// highlight styles the fuzzy-matched characters within a label. The selected
+// row keeps its background under them, so a match stays visible where the
+// cursor is.
+func highlight(label string, idx []int, selected bool) string {
+	plain, match := lipgloss.NewStyle(), stMatch
+	if selected {
+		plain, match = stSel, stSelMatch
 	}
 	set := make(map[int]bool, len(idx))
 	for _, i := range idx {
 		set[i] = true
 	}
-	var b strings.Builder
-	for i, r := range []rune(label) {
-		if set[i] {
-			b.WriteString(stMatch.Render(string(r)))
-		} else {
-			b.WriteRune(r)
+	var b, run strings.Builder
+	on := false
+	flush := func() {
+		if run.Len() == 0 {
+			return
 		}
+		if on {
+			b.WriteString(match.Render(run.String()))
+		} else {
+			b.WriteString(plain.Render(run.String()))
+		}
+		run.Reset()
 	}
+	for i, r := range []rune(label) {
+		if set[i] != on {
+			flush()
+			on = set[i]
+		}
+		run.WriteRune(r)
+	}
+	flush()
 	return b.String()
-}
-
-// plain renders a row's content without styling; the number gutter and indent
-// are prepended by rowLine.
-func plain(r rowItem) string {
-	return prPrefixPlain(r.n) + r.n.label
 }
 
 func (m *model) renderContent() {

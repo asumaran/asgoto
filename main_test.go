@@ -681,3 +681,19 @@ func TestStatusDotStyles(t *testing.T) {
 		}
 	}
 }
+
+func TestMatchesStayMarkedOnTheSelectedRow(t *testing.T) {
+	if !stMatch.GetUnderline() || !stSelMatch.GetUnderline() || stSelMatch.GetBackground() != stSel.GetBackground() {
+		t.Errorf("a match is underlined, and keeps the selection's background on the selected row")
+	}
+	sel, plain := highlight("fix cart", []int{0, 1, 2}, true), highlight("fix cart", []int{0, 1, 2}, false)
+	if !strings.Contains(sel, stSelMatch.Render("fix")) || !strings.Contains(sel, stSel.Render(" cart")) {
+		t.Errorf("selected = %q", sel)
+	}
+	if !strings.Contains(plain, stMatch.Render("fix")) || !strings.HasSuffix(plain, " cart") {
+		t.Errorf("plain = %q", plain)
+	}
+	if ansi.Strip(sel) != "fix cart" || ansi.Strip(highlight("fix cart", nil, true)) != "fix cart" {
+		t.Errorf("highlighting must not change the text: %q", ansi.Strip(sel))
+	}
+}
