@@ -36,7 +36,10 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   query occurs whole, that occurrence is the match, for the highlight and the
   score. The same file in every
   tool of the family.
-  It is the one exception to the single file, because it is shared.
+  With `highlight.go` it is the exception to the single file: both are shared.
+- `highlight.go` — `highlight`/`highlightFrom`, `matchOver`, `onSel`,
+  `selPad` and the `stSel`/`stMatch` styles: how a match and the selected row
+  look. The same file in every tool of the family.
 - `herdr-plugin.toml` — the herdr plugin manifest (id `asumaran.asgoto`): a
   `[[build]]` (runs `scripts/fetch-binary.sh` on install), the `picker` popup
   pane, and the `open` action that opens it (keybind entry point).
@@ -143,11 +146,14 @@ Non-negotiables that are not obvious from the code:
   so there is none here. The list starts on screen row `listY`, one cell in
   from the left side, which is what the click-to-row math uses. Errors and
   notices take the help line.
-- **Filter matches** look the same in every picker of the family, asgitlog's
-  way: the match color plus an underline. The selected row shows them too.
-  Each piece of that row carries the selection's background itself, because
-  nesting a styled match inside one big `stSel.Render` would cut the
-  background at the match's reset.
+- **Filter matches** look the same in every tool of the family and come from
+  one place, `highlight.go` (the same file in each repo; it also owns `stSel`
+  and `stMatch`): a match is the match color plus an underline on top of the
+  style the text already has, and the selected row shows them too. That row
+  is never one big `stSel.Render` around styled text, because the reset that
+  ends a match would cut the background: every piece is rendered over `stSel`
+  (`highlight(s, idx, stSel)`) and `selPad` fills the rest. Do not write a
+  local highlighter.
 - **Mouse**: a left click on a row moves the cursor and never selects, so a
   stray click cannot switch spaces; the wheel walks the cursor a row at a time
   (there is no preview to scroll). `q` quits only while the filter is empty.

@@ -1423,10 +1423,6 @@ type model struct {
 
 var (
 	stPrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
-	stSel    = lipgloss.NewStyle().Background(lipgloss.Color("8")).Bold(true)
-	// a filter match: asgitlog's look, also over the selected row's background
-	stMatch    = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Underline(true)
-	stSelMatch = stSel.Foreground(lipgloss.Color("13")).Underline(true)
 	// stDev colors the "(dev)" marker shown in the prompt for non-release builds.
 	stDev = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
 
@@ -1872,11 +1868,11 @@ func rowLine(r rowItem, selected bool, width int) string {
 		if pad := width - 2 - leftW - lipgloss.Width(right); pad > 0 {
 			right += strings.Repeat(" ", pad)
 		}
-		return dot + stSel.Render(left) + highlight(r.n.label, idx, true) + stSel.Render(right)
+		return dot + stSel.Render(left) + highlight(r.n.label, idx, stSel) + stSel.Render(right)
 	}
 	name := r.n.label
 	if r.match {
-		name = highlight(r.n.label, r.idx, false)
+		name = highlight(r.n.label, r.idx, lipgloss.NewStyle())
 	}
 	left := "  " + indent + prPrefix(r.n) + name
 	return dot + left + rightColumn(rightSegs(r.n), width-2-rightMargin-lipgloss.Width(left), true)
@@ -1998,42 +1994,6 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return string(rs[:max-1]) + "…"
-}
-
-// highlight styles the fuzzy-matched characters within a label. The selected
-// row keeps its background under them, so a match stays visible where the
-// cursor is.
-func highlight(label string, idx []int, selected bool) string {
-	plain, match := lipgloss.NewStyle(), stMatch
-	if selected {
-		plain, match = stSel, stSelMatch
-	}
-	set := make(map[int]bool, len(idx))
-	for _, i := range idx {
-		set[i] = true
-	}
-	var b, run strings.Builder
-	on := false
-	flush := func() {
-		if run.Len() == 0 {
-			return
-		}
-		if on {
-			b.WriteString(match.Render(run.String()))
-		} else {
-			b.WriteString(plain.Render(run.String()))
-		}
-		run.Reset()
-	}
-	for i, r := range label { // i is a byte offset, like the matcher's
-		if set[i] != on {
-			flush()
-			on = set[i]
-		}
-		run.WriteRune(r)
-	}
-	flush()
-	return b.String()
 }
 
 func (m *model) renderContent() {
