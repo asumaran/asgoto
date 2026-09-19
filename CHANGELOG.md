@@ -1,3 +1,7 @@
+## v0.14.0 (2026-09-19)
+
+* refactor: rename herdr-goto to asgoto (6a270c0)
+
 ## v0.13.1 (2026-09-19)
 
 * fix(ui): fit the quit keys in the help line (f13e7bb)
