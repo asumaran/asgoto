@@ -1,3 +1,13 @@
+## v0.12.0 (2026-09-18)
+
+* ci: run gofmt, vet and tests on push (ac4bfb0)
+* test(tui): add a pty end-to-end check (cc07e2f)
+* refactor(ui): migrate to bubble tea v2 (0a7ae1d)
+* docs(readme): keep the readme user-facing (cf90844)
+* feat(tui): match herdr's status indicators (dc06b38)
+* feat(tui): add priority sort toggle (7de1ae1)
+* docs(claude): move design notes to docs/DESIGN.md (4611847)
+
 ## v0.11.0 (2026-09-12)
 
 * chore(scripts): re-record the demo GIF on every release (5f8d2c5)
