@@ -700,7 +700,7 @@ func clipboardStub(t *testing.T) string {
 	return log
 }
 
-func helpLine(m model) string {
+func footOf(m model) string {
 	plain := strings.Split(ansi.Strip(m.View().Content), "\n")
 	return plain[len(plain)-2]
 }
@@ -733,7 +733,7 @@ func TestCopyKeyCopiesThePath(t *testing.T) {
 		if got, _ := os.ReadFile(log); string(got) != c.want {
 			t.Errorf("%s: the clipboard got %q, want %q", c.kind, got, c.want)
 		}
-		if help := helpLine(m); !strings.Contains(help, "copied "+c.label) {
+		if help := footOf(m); !strings.Contains(help, "copied "+c.label) {
 			t.Errorf("%s: help line = %q, want the confirmation with the home shortened", c.kind, help)
 		}
 		if m.ti.Value() != "" {
@@ -741,7 +741,7 @@ func TestCopyKeyCopiesThePath(t *testing.T) {
 		}
 	}
 	res, _ := m.Update(clearFlashMsg(m.flash.seq))
-	if help := helpLine(res.(model)); !strings.Contains(help, "type filter") {
+	if help := footOf(res.(model)); !strings.Contains(help, "type filter") {
 		t.Errorf("after the timer the help is back: %q", help)
 	}
 }
@@ -756,7 +756,7 @@ func TestCopyKeyWithoutADirectory(t *testing.T) {
 	m.cursor = len(m.rows) - 1 // the space without a checkout
 	res, cmd := m.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
 	res, _ = res.(model).Update(cmd())
-	if help := helpLine(res.(model)); !strings.Contains(help, "nothing to copy") {
+	if help := footOf(res.(model)); !strings.Contains(help, "nothing to copy") {
 		t.Errorf("help line = %q, want \"nothing to copy\"", help)
 	}
 	if _, err := os.Stat(log); err == nil {
@@ -792,32 +792,63 @@ func TestNodeDir(t *testing.T) {
 	}
 }
 
-// TestFlashKeepsTheFrameHeight covers the flash arriving while `?` has the
-// help expanded: the flash is one line, so the tree takes the lines back and
-// the frame stays as tall as the terminal; and returns them afterwards.
-func TestFlashKeepsTheFrameHeight(t *testing.T) {
+// TestPanel: f1 lays the options and the keys over a frame that keeps its
+// size, takes every key while it is open (the order is set there), and esc
+// closes it before it quits. `?` is text for the filter.
+func TestPanel(t *testing.T) {
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir())
 	m := copyModel(t, t.TempDir())
-	res, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
+	m.ti = newFilterInput("asgoto", "Search…") // focused, as main builds it
+	res, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
 	m = res.(model)
-	m.toggleHelp()
-	if m.footH() < 2 {
-		t.Fatalf("the expanded help takes %d line(s), want more than one", m.footH())
+	press := func(keys ...tea.KeyPressMsg) {
+		for _, k := range keys {
+			res, _ := m.Update(k)
+			m = res.(model)
+		}
 	}
-	expanded := m.vp.Height()
-	res, _ = m.Update(flashMsg("copied ~/x"))
-	m = res.(model)
-	if got := len(strings.Split(m.render(), "\n")); got != m.height {
-		t.Errorf("with a flash over the expanded help: %d lines, want %d", got, m.height)
+	if foot := footOf(m); !strings.Contains(foot, "f1 options") || strings.Contains(foot, "sort") {
+		t.Errorf("the help line offers the panel and no sort key: %q", foot)
 	}
-	res, _ = m.Update(clearFlashMsg(m.flash.seq))
+	tree := m.vp.Height()
+	press(tea.KeyPressMsg{Code: tea.KeyF1})
+	plain := strings.Split(ansi.Strip(m.render()), "\n")
+	if len(plain) != m.height || m.vp.Height() != tree {
+		t.Fatalf("the panel changed the frame: %d lines (tree %d), want %d (tree %d)", len(plain), m.vp.Height(), m.height, tree)
+	}
+	all := strings.Join(plain, "\n")
+	for _, want := range []string{"╭─ options ", "▌ Order", "‹spaces›", "Panes", "^a", "Keys", "copy the path", "esc close"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("the panel lacks %q:\n%s", want, all)
+		}
+	}
+	for i, l := range plain {
+		if ansi.StringWidth(l) != 100 {
+			t.Errorf("line %d is %d cells wide, want 100", i, ansi.StringWidth(l))
+		}
+	}
+	press(tea.KeyPressMsg{Code: 'z', Text: "z"}, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	if m.ti.Value() != "" || !m.prioritySort {
+		t.Errorf("space on Order sets the priority order and nothing reaches the filter: %q %v", m.ti.Value(), m.prioritySort)
+	}
+	res, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = res.(model)
-	if got := len(strings.Split(m.render(), "\n")); got != m.height || m.vp.Height() != expanded {
-		t.Errorf("after the flash: %d lines (tree %d), want %d (tree %d)", got, m.vp.Height(), m.height, expanded)
+	if m.panel.open || cmd != nil {
+		t.Errorf("esc closes the panel and nothing else: open=%v cmd=%v", m.panel.open, cmd)
+	}
+	press(tea.KeyPressMsg{Code: '?', Text: "?"})
+	if m.ti.Value() != "?" || m.panel.open {
+		t.Errorf("? is text: filter %q, panel open %v", m.ti.Value(), m.panel.open)
+	}
+	// ctrl+s is no longer the order's key.
+	press(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if !m.prioritySort {
+		t.Errorf("ctrl+s should not touch the order any more")
 	}
 }
 
-// TestCopyKeyIsInTheFullHelpOnly keeps the folded line short enough for the
-// popup: the copy key is listed only while `?` has the help expanded.
+// TestCopyKeyIsInTheFullHelpOnly keeps the help line short enough for the
+// popup: the copy key is listed in the panel only.
 func TestCopyKeyIsInTheFullHelpOnly(t *testing.T) {
 	h, keys := help.New(), defaultKeys()
 	h.SetWidth(200)

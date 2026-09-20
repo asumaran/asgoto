@@ -110,7 +110,7 @@ def done():
     print("\n%d failure(s)" % len(failures))
     sys.exit(1 if failures else 0)
 
-CTRL_A, CTRL_S, CTRL_T, CTRL_Y, ESC, ENTER, TAB, DOWN, UP = b"\x01", b"\x13", b"\x14", b"\x19", b"\x1b", b"\r", b"\t", b"\x1b[B", b"\x1b[A"
+CTRL_A, CTRL_Y, PANEL, ESC, ENTER, TAB, DOWN, UP = b"\x01", b"\x19", b"\x1bOP", b"\x1b", b"\r", b"\t", b"\x1b[B", b"\x1b[A"
 
 # ---------- sandbox: synthetic herdr session, herdr + gh stubs ----------
 def ws(wid, label, number, repo, path, linked=False, focused=False):
@@ -226,12 +226,22 @@ check("▌" in rows(f)[1], "the wheel walks the cursor: %r" % rows(f))
 os.write(s.master, b"q"); s.pump(0.4)
 check(s.finish() == 0 and actions() == [], "q quits with an empty filter without touching herdr: %r" % actions())
 
-# ---------- run 4: ctrl+s flips the sort label, esc does nothing ----------
+# ---------- run 4: the panel sets the order, esc closes it and then quits ----------
 s = session()
-s.start("asgoto ❯")
-f = s.send(CTRL_S, 0.5)
-check(status(f) == "sort: priority", "ctrl+s switches to the priority order: %r" % status(f))
-s.send(CTRL_S, 0.3)   # the choice is persisted; put it back
+f = s.start("asgoto ❯")
+rows_before = len(f)
+f = s.send(PANEL, 0.5); dump("panel", f)
+check(len(f) == rows_before and any("╭─ options " in l for l in f) and any("▌ Order" in l for l in f) and any("copy the path" in l for l in f),
+      "f1 lays the options and the keys over the frame, which keeps its size")
+f = s.send(b"zz ", 0.5)   # space on the order, the first option
+check(status(f) == "sort: priority", "the panel switches to the priority order: %r" % status(f))
+s.send(b" ", 0.3)   # the choice is persisted; put it back
+f = s.send(ESC, 0.5)
+check(s.proc.poll() is None and not any("╭─ options " in l for l in f) and prompt(f).startswith("asgoto ❯ Search"),
+      "esc closes the panel, which took the keys: %r" % prompt(f))
+f = s.send(b"?", 0.4)
+check(prompt(f) == "asgoto ❯ ?", "? is text for the filter: %r" % prompt(f))
+s.send(b"\x7f", 0.3)
 os.write(s.master, ESC); s.pump(0.4)
 check(s.finish() == 0 and actions() == [], "esc quits without touching herdr: %r" % actions())
 
@@ -243,9 +253,8 @@ copied = open(clip_log).read() if os.path.exists(clip_log) else None
 check(copied == "/r/dotfiles", "ctrl+y feeds the clipboard the path of the space under the cursor: %r" % copied)
 check("copied /r/dotfiles" in f[-2], "the help line confirms the copy: %r" % f[-2])
 check(prompt(f) == "asgoto ❯ Search repos, worktrees and panes…", "ctrl+y is not typed into the filter: %r" % f[1])
-s.pump(2.2); f = s.send(b"?", 0.5)
-check(any(re.search(r"\^y\s+copy the path", l) for l in f), "the flash gives the help line back and ? lists the copy key: %r" % f[-5:-1])
-s.send(ESC, 0.4)   # folds the help
+s.pump(2.2); f = s.frame()
+check("type filter" in f[-2], "the flash gives the help line back: %r" % f[-2])
 os.write(s.master, ESC); s.pump(0.4)
 check(s.finish() == 0 and actions() == [], "copying never touches herdr: %r" % actions())
 

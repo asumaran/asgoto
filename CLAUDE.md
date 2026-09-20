@@ -50,8 +50,11 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   herdr's popup), the placeholder, the `(dev)` mark on the edge over the
   input. The same
   file in every tool of the family.
-- `helpfoot.go` — the help at the foot: the key that expands it, its height
-  and its lines cut to the width. The same file in every tool of the family.
+- `helpfoot.go` — the help line at the foot, cut to the width, and the key
+  that opens the panel. The same file in every tool of the family.
+- `panel.go` — the panel `f1` opens over the frame: options to change in
+  place and every key under them (`option`, `panel`, `panelLines`,
+  `overlay`). The same file in every tool of the family.
 - `listnav.go` — `listNav`: the keys that move the cursor through a list and
   where each one takes it, group headers skipped. The same file in every tool
   of the family.
@@ -177,7 +180,7 @@ Non-negotiables that are not obvious from the code:
   `ctrl+p`/`ctrl+n` a row, `pgup`/`pgdn` a page, `alt+↑`/`alt+↓` or
   `home`/`end` the ends. `home`/`end` are taken from the filter input's caret
   on purpose (`←`/`→` and `ctrl+e` still move it). The preview scrolls with
-  `shift+↑`/`shift+↓` only. The keys are listed in the expanded help.
+  `shift+↑`/`shift+↓` only. The keys are listed in the panel.
 - **The filter input** comes from `prompt.go` (the same file in every tool of
   the family). Inside herdr's popup the prompt is the arrow alone, because the
   pane's title (`[[panes]] title` in the manifest, the tool's name) already
@@ -187,23 +190,28 @@ Non-negotiables that are not obvious from the code:
   prompt.
   herdr sets `HERDR_PLUGIN_ENTRYPOINT_ID` for a plugin pane; that is how the
   two cases are told apart.
-- **Help**: the line at the foot shows the tool's own actions, `? help` and the
-  quit keys; `?` expands it into every key in columns and the main section
-  gives way (`helpfoot.go`, the same file in every tool of the family). `?`
-  expands only while the filter is empty, otherwise it is text, like `q`;
-  `f1` always does; `esc` folds the help before it quits. Moving, scrolling
-  and resizing live in the expanded help only, so the folded line stays short
-  enough for a narrow popup. A message (error, notice) takes the help's place
-  on one line.
+- **Help and options**: the line at the foot shows the tool's own actions,
+  the panel's key and the quit keys (`helpfoot.go`). `f1` opens the panel (`panel.go`, the same file in
+  every tool of the family): the options on top, to change with `←`/`→` or
+  `space`, and every key in columns under them, laid out by bubbles' `help`
+  from `FullHelp()`. The panel is spliced over the middle of the frame, which
+  keeps its size; while it is open it takes every key and the mouse, and `esc`
+  closes it before it does anything else. `?` is not a help key: the filter
+  has the focus, so it is text. Moving, scrolling and resizing are listed in
+  the panel only, so the help line stays short enough for a narrow popup. A
+  message (error, notice) takes the help line's place.
+  This tool's options are the order and the panes: `options()` lists them as things stand and
+  `setOption` is the one place that changes a setting, for the panel and for
+  the keys that kept a shortcut. A setting that is chosen once has no key of
+  its own; the panel is where it lives.
 - **Copying**: `ctrl+y` copies the directory of the row under the cursor
   (`nodeDir`: the checkout of a repo or worktree, a pane's `cwd`, and the
   first pane's `cwd` for a space that is no git checkout) with `copyCmd`
   (`clipboard.go`). The clipboard gets the absolute path and the help line
   flashes `copied <path with ~>` or `nothing to copy` (`flash.go`, shown by
   `footMsg`, which has nothing else to show here); both files are the same in
-  every tool of the family. The flash is one line, so `fitBody` resizes the
-  tree when it comes and goes over an expanded help. The key is in the
-  expanded help only. `ASGOTO_CLIPBOARD` replaces the clipboard command,
+  every tool of the family. The key is listed in the panel only.
+  `ASGOTO_CLIPBOARD` replaces the clipboard command,
   which is how the tests and the pty check log it.
 - **`-dump` / `-query`**: flags are parsed with `flag` (`-version`, `-dump`,
   `-query`). `-dump` runs the same `main()` path as the popup up to the model
@@ -212,7 +220,7 @@ Non-negotiables that are not obvious from the code:
   every node with `dumpLine`. `-dump -query x` goes through `queryDump`: it
   sets the input, calls `applyFilter` and `selectBestMatch` on that model and
   prints `m.rows`, so there is no second filter to keep in sync. It follows
-  the persisted `ctrl+a` / `ctrl+s` state. `loadJSON` bounds each herdr read
+  the persisted panes and order settings. `loadJSON` bounds each herdr read
   (`herdrTimeout`) and reports herdr's own JSON error message, so an
   unreachable server is an error and exit 1, never a hang. Read-only.
 - **Filter matches** look the same in every tool of the family and come from

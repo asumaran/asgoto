@@ -7,16 +7,17 @@ touching the tree building, the filter, the right column or the caches in
 
 
 - Tree = two levels by default: repo (== main checkout) -> worktrees. Panes are
-  hidden by default; `ctrl+t` toggles them, persisted in `state.json`
+  hidden by default; `ctrl+a` toggles them, persisted in `state.json`
   (`{"show_panes":bool,"priority_sort":bool}`, under `HERDR_PLUGIN_STATE_DIR`
-  as a plugin, `~/.config/herdr/asgoto-tui/` standalone).
+  as a plugin, the same `~/.local/state/herdr/plugins/asumaran.asgoto/`
+  standalone).
 - Repos ordered by lowest workspace `number`. Worktrees inside a repo sort
   oldest-first by checkout creation time (directory birth time, which tracks PR
   order in practice), workspace `number` as tiebreaker.
   Grouping key: `worktree.repo_key` (falls back to checkout_path, then a pane's
   cwd, then workspace id). Known rough edge: a workspace herdr reports no
   worktree metadata for may show as its own group.
-- Priority order (`ctrl+s`, `persisted.PrioritySort`): `sortTree` re-sorts
+- Priority order (the panel's Order option, `persisted.PrioritySort`): `sortTree` re-sorts
   every sibling group by (`statusRank` desc, `node.seq` desc, `node.ord`),
   the same key as herdr's Agents panel `agent_panel_sort = "priority"`, but
   per tree level instead of a flat agent list, so the filter-with-ancestors

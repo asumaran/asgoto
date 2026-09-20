@@ -51,10 +51,9 @@ runtime state (`state.json`, `prcache.json`) lives.
 | `↑` `↓`, `ctrl+p` `ctrl+n` | move |
 | PgDn/PgUp | move a page |
 | `alt+↑` `alt+↓`, Home/End | top or bottom of the list |
-| `?` while the filter is empty, `f1` | expand the help line into every key (`esc` folds it) |
+| `f1` | open the panel: the order and the panes to change in place, and every key (`esc` closes it) |
 | `enter` | switch to the selected row |
 | `ctrl+a` | show or hide panes |
-| `ctrl+s` | switch between space order and priority order |
 | `ctrl+y` | copy the path of the selected row to the clipboard (a repo's or worktree's checkout, a pane's working directory); the help line confirms it |
 | `esc`, `ctrl+c`, `q` with an empty filter | quit |
 | click, mouse wheel | move the cursor (never selects) |
@@ -108,7 +107,7 @@ shortcut because it would conflict with searching by PR or ticket number.
 By default repos follow the sidebar's order, and the worktrees inside a repo
 go oldest first by checkout creation time, which tracks PR order in practice.
 
-`ctrl+s` switches to priority order. It is herdr's Agents panel
+The panel (`f1`) switches to priority order. It is herdr's Agents panel
 `agent_panel_sort = "priority"` applied to every level of the tree: blocked
 first, then done, working, idle, and rows without an agent. Within a status
 the most recent state change goes first. A repo's own panes stay above its
@@ -155,7 +154,7 @@ and prints one line per node, indented: ticket and PR, the label, then the
 kind, the status, the id `enter` would focus and what the right column shows.
 It lists every pane, the ones the popup hides too. With `-query` it prints
 the rows the filter lists instead, in the mode the popup would open in
-(`ctrl+a` and `ctrl+s` are remembered): `>` marks the match the cursor lands
+(the panes and the order are remembered): `>` marks the match the cursor lands
 on, `*` the other matches, each with its score, and unmarked rows are the
 parents kept for context. If herdr cannot be reached it prints the error and
 exits 1. Both only read.

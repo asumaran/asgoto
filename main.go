@@ -1268,27 +1268,26 @@ type keyMap struct {
 	Nav    listNav
 	Select key.Binding
 	Toggle key.Binding
-	Sort   key.Binding
 	Copy   key.Binding
 	Cancel key.Binding
 	Filter key.Binding
 	Help   key.Binding
 }
 
-// ShortHelp is the folded help line: the tool's own actions, the help and the
-// quit keys. The list's keys (listnav.go) and the copy key are in the expanded
-// help: at the popup's 55% width the line would be cut before the quit keys.
+// ShortHelp is the help line: the tool's own actions, the panel's key and the
+// quit keys. The list's keys (listnav.go) and the copy key are in the panel:
+// at the popup's 55% width the line would be cut before the quit keys.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Filter, k.Select, k.Toggle, k.Sort, k.Help, k.Cancel}
+	return []key.Binding{k.Filter, k.Select, k.Toggle, k.Help, k.Cancel}
 }
 
-// FullHelp is what `?` expands the help into, one column per group: the
-// filter, the list, the tool's actions, help and quit.
+// FullHelp is the panel's list of keys, one column per group: the filter, the
+// list, the tool's actions, the panel and quit.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Filter},
 		{k.Nav.Up, k.Nav.PageUp, k.Nav.Top},
-		{k.Select, k.Toggle, k.Sort, k.Copy},
+		{k.Select, k.Toggle, k.Copy},
 		{k.Help, k.Cancel},
 	}
 }
@@ -1298,13 +1297,12 @@ func defaultKeys() keyMap {
 		Nav:    defaultListNav(),
 		Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		Toggle: key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("^a", "panes")),
-		Sort:   key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("^s", "sort")),
 		Copy:   key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("^y", "copy the path")),
 		Cancel: key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc/q", "quit")),
 		// Help-only entry: a binding without keys is disabled and the help
 		// bubble would skip it. Nothing ever matches against it.
 		Filter: key.NewBinding(key.WithKeys("type"), key.WithHelp("type", "filter")),
-		Help:   helpKey,
+		Help:   helpBinding(true),
 	}
 }
 
@@ -1338,6 +1336,7 @@ type model struct {
 	help          help.Model
 	keys          keyMap
 	flash         flash    // confirmation on the help line (flash.go)
+	panel         panel    // options and keys, over the frame while it is open (panel.go)
 	action        []string // herdr CLI args to run after quit (nil = no action)
 	focusPane     string   // pane to focus after quit via the socket API (pane.focus); "" = none
 }
@@ -1958,13 +1957,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case flashMsg:
-		cmd := m.flash.set(string(msg))
-		m.fitBody() // the flash is one line, the expanded help was more
-		return m, cmd
+		return m, m.flash.set(string(msg))
 
 	case clearFlashMsg:
 		m.flash.clear(msg)
-		m.fitBody()
 		return m, nil
 
 	case deltaMsg:
@@ -2023,6 +2019,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseWheelMsg:
 		// There is no preview to scroll: the wheel walks the cursor.
+		if m.panel.open {
+			return m, nil
+		}
 		if k, ok := wheelKey(msg); ok {
 			if to := m.keys.Nav.move(k, m.cursor, len(m.rows), m.vp.Height(), nil); to != m.cursor {
 				m.cursor = to
@@ -2034,7 +2033,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// A left click on a row moves the cursor; it never selects, so a stray
 		// click cannot switch spaces (same reasoning as asgotopr).
-		if msg.Button != tea.MouseLeft || !inList(msg.X, msg.Y, listY, m.innerW(), m.vp.Height()) {
+		if m.panel.open || msg.Button != tea.MouseLeft || !inList(msg.X, msg.Y, listY, m.innerW(), m.vp.Height()) {
 			return m, nil
 		}
 		if i, ok := rowUnder(msg.Y, listY, m.vp.YOffset(), len(m.rows)); ok && i != m.cursor {
@@ -2045,11 +2044,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		switch {
-		case foldsHelp(msg, m.help):
-			m.toggleHelp() // esc folds the help before it quits
+		case msg.String() == "ctrl+c":
+			return m, tea.Quit
+		case m.panel.open:
+			// The panel takes every key: esc closes it before it quits.
+			if a := m.panel.update(msg, m.options()); a.id != "" {
+				return m, m.setOption(a.id, a.value)
+			}
 			return m, nil
-		case isHelpKey(msg, m.ti.Value()):
-			m.toggleHelp()
+		case isHelpKey(msg):
+			m.panel.toggle()
 			return m, nil
 		case msg.String() == "q" && m.ti.Value() == "":
 			// q quits only while the filter is empty; otherwise it is text.
@@ -2073,32 +2077,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case key.Matches(msg, m.keys.Toggle):
-			var cur *node
-			if m.cursor >= 0 && m.cursor < len(m.rows) {
-				cur = m.rows[m.cursor].n
-			}
-			m.showPanes = !m.showPanes
-			m.applyFilter()
-			m.keepCursorOn(cur)
-			m.renderContent()
-			return m, saveStateCmd(m.persisted())
+			return m, m.setOption("panes", nextValue(m.options(), "panes"))
 		case key.Matches(msg, m.keys.Copy):
 			path := ""
 			if m.cursor >= 0 && m.cursor < len(m.rows) {
 				path = nodeDir(m.rows[m.cursor].n)
 			}
 			return m, copyCmd("asgoto", homeRel(path), path)
-		case key.Matches(msg, m.keys.Sort):
-			var cur *node
-			if m.cursor >= 0 && m.cursor < len(m.rows) {
-				cur = m.rows[m.cursor].n
-			}
-			m.prioritySort = !m.prioritySort
-			m.resort()
-			m.applyFilter()
-			m.keepCursorOn(cur)
-			m.renderContent()
-			return m, saveStateCmd(m.persisted())
 		}
 
 		var cmd tea.Cmd
@@ -2156,11 +2141,49 @@ func (m model) render() string {
 		}
 		out = append(out, side+fit(l, m.innerW())+side)
 	}
-	out = append(out, hline(w, "├", "┤", "", m.counter()))
-	for _, l := range m.footLines() {
-		out = append(out, framed(w, l))
+	out = append(out, hline(w, "├", "┤", "", m.counter()), framed(w, m.footLine()), hline(w, "╰", "╯", "", ""))
+	if m.panel.open {
+		keys := keyLines(m.help, m.keys, w-10)
+		out = overlay(out, panelLines(m.options(), m.panel.cursor, keys, w-4, len(out)-2), w)
 	}
-	return strings.Join(append(out, hline(w, "╰", "╯", "", "")), "\n")
+	return strings.Join(out, "\n")
+}
+
+// options is what the panel offers. The order is chosen there and nowhere
+// else; the panes keep ctrl+a, the family's "list more" key.
+func (m *model) options() []option {
+	cur := func(on bool) int {
+		if on {
+			return 1
+		}
+		return 0
+	}
+	return []option{
+		{id: "order", label: "Order", values: []string{"spaces", "priority"}, cur: cur(m.prioritySort)},
+		{id: "panes", label: "Panes", values: []string{"hidden", "shown"}, cur: cur(m.showPanes), key: "^a"},
+	}
+}
+
+// setOption changes a setting and remembers it, with the cursor kept on its
+// node. The keys and the panel both come through here.
+func (m *model) setOption(id string, v int) tea.Cmd {
+	var cur *node
+	if m.cursor >= 0 && m.cursor < len(m.rows) {
+		cur = m.rows[m.cursor].n
+	}
+	switch id {
+	case "order":
+		m.prioritySort = v == 1
+		m.resort()
+	case "panes":
+		m.showPanes = v == 1
+	default:
+		return nil
+	}
+	m.applyFilter()
+	m.keepCursorOn(cur)
+	m.renderContent()
+	return saveStateCmd(m.persisted())
 }
 
 // footMsg is what takes the help's place while there is something to say.
@@ -2172,33 +2195,17 @@ func (m model) footMsg() string {
 	return ""
 }
 
-func (m model) footLines() []string {
+func (m model) footLine() string {
 	if msg := m.footMsg(); msg != "" {
-		return []string{msg}
+		return msg
 	}
-	return helpLines(m.help, m.keys, m.width-4, m.footH())
+	return helpLine(m.help, m.keys, m.width-4)
 }
 
-// footH is the height of the foot: a message takes one line, the help more
-// while `?` has it expanded; the tree keeps at least minBodyH.
-func (m *model) footH() int {
-	if m.footMsg() != "" {
-		return 1
-	}
-	return helpHeight(m.help, m.keys, m.height-frameRows-minBodyH)
-}
-
-const minBodyH = 4
-
-// fitBody gives the tree the lines the frame and the foot leave.
+// fitBody gives the tree the lines the frame and the help line leave.
 func (m *model) fitBody() {
-	m.vp.SetHeight(max(1, m.height-frameRows-m.footH()))
+	m.vp.SetHeight(max(1, m.height-frameRows-1))
 	m.renderContent()
-}
-
-func (m *model) toggleHelp() {
-	m.help.ShowAll = !m.help.ShowAll
-	m.fitBody()
 }
 
 // counter is the rows listed out of every row of the current mode, for the
