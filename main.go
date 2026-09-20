@@ -1363,7 +1363,7 @@ func defaultKeys() keyMap {
 	return keyMap{
 		Nav:    defaultListNav(),
 		Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
-		Toggle: key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("^t", "panes")),
+		Toggle: key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("^a", "panes")),
 		Sort:   key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("^s", "sort")),
 		Cancel: key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc/q", "quit")),
 		// Help-only entry: a binding without keys is disabled and the help
@@ -1396,7 +1396,7 @@ type model struct {
 	initCmds      []tea.Cmd          // PR fetches to fan out from Init
 	rows          []rowItem
 	cursor        int
-	showPanes     bool // panes are hidden by default; ctrl+t toggles them
+	showPanes     bool // panes are hidden by default; ctrl+a toggles them (the family's "list more" key)
 	prioritySort  bool // order every level by agent status (see sortTree); ctrl+s toggles it
 	ti            textinput.Model
 	vp            viewport.Model
@@ -1626,8 +1626,8 @@ func prPrefix(n *node) string {
 	return s + "  "
 }
 
-// sortLabel names the active order on the prompt line's right edge: unlike
-// ctrl+t, the list alone does not tell which one is on. Dim for the default
+// sortLabel names the active order on the edge over the input: unlike
+// ctrl+a, the list alone does not tell which one is on. Dim for the default
 // order, prompt-colored when priority sort is on.
 func sortLabel(byPriority bool) string {
 	if byPriority {

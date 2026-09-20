@@ -191,12 +191,12 @@ s.send(ENTER, 0.3)
 check(s.finish() == 0, "clean exit after enter")
 check(actions() == ["workspace focus w2"], "enter focuses the workspace: %r" % actions())
 
-# ---------- run 2: ctrl+t lists panes, enter on one focuses it ----------
+# ---------- run 2: ctrl+a lists panes, enter on one focuses it ----------
 s = session()
 s.start("asgoto ❯")
-f = s.send(CTRL_T, 0.6); dump("panes", f)
+f = s.send(CTRL_A, 0.6); dump("panes", f)
 r = rows(f)
-check(any("claude" in x and "working" in x for x in r), "ctrl+t lists the agent pane with its status: %r" % r)
+check(any("claude" in x and "working" in x for x in r), "ctrl+a lists the agent pane with its status: %r" % r)
 f = s.send(b"claude", 0.6)
 s.send(ENTER, 0.3)
 check(s.finish() == 0, "clean exit after enter on a pane")

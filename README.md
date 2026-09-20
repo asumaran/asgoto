@@ -53,7 +53,7 @@ runtime state (`state.json`, `prcache.json`) lives.
 | `alt+↑` `alt+↓`, Home/End | top or bottom of the list |
 | `?` while the filter is empty, `f1` | expand the help line into every key (`esc` folds it) |
 | `enter` | switch to the selected row |
-| `ctrl+t` | show or hide panes |
+| `ctrl+a` | show or hide panes |
 | `ctrl+s` | switch between space order and priority order |
 | `esc`, `ctrl+c`, `q` with an empty filter | quit |
 | click, mouse wheel | move the cursor (never selects) |
@@ -63,7 +63,7 @@ Both toggles are remembered between sessions.
 ## What it shows
 
 The list is a tree: each repo (its main checkout) with its worktrees under
-it. Panes are hidden until you press `ctrl+t`. The exception is a pane running
+it. Panes are hidden until you press `ctrl+a`. The exception is a pane running
 a foreground command (`pnpm nx dev app`, `vitest`, ...). That one is always
 listed, labelled by the command, with the TCP ports it listens on at the right
 (`:3000`).
