@@ -571,8 +571,9 @@ func TestResortKeepsCorporaParallel(t *testing.T) {
 	}
 }
 
-// TestViewSortLabel covers the active-order label: set into the frame's top border, next to
-// the counter, naming the mode, and dropped when the popup is too narrow for it.
+// TestViewSortLabel covers the active-order label: set into the frame's top
+// border, naming the mode, and dropped when the popup is too narrow for it.
+// The counter sits on the edge under the list.
 func TestViewSortLabel(t *testing.T) {
 	m := model{ti: textinput.New(), vp: viewport.New(viewport.WithWidth(58), viewport.WithHeight(5)), help: help.New(), keys: defaultKeys(), width: 60, height: 11}
 	m.ti.Prompt = "asgoto > "
@@ -581,8 +582,11 @@ func TestViewSortLabel(t *testing.T) {
 	// lipgloss v2 always emits ANSI, so the text is compared stripped.
 	line := func(y int) string { return strings.Split(ansi.Strip(m.render()), "\n")[y] }
 
-	if edge := line(0); !strings.HasSuffix(edge, " 0/0 sort: spaces (dev) ─╮") { // tests run an unstamped build
-		t.Errorf("default: counter edge %q, want it to end in the label", edge)
+	if edge := line(0); !strings.HasSuffix(edge, "─ sort: spaces (dev) ─╮") { // tests run an unstamped build
+		t.Errorf("default: top border %q, want it to end in the label", edge)
+	}
+	if edge := line(m.height - 3); !strings.HasSuffix(edge, "─ 0/0 ─┤") {
+		t.Errorf("default: edge under the list %q, want the counter", edge)
 	}
 	if prompt := line(1); !strings.HasPrefix(prompt, "│ asgoto > herdr") || strings.Contains(prompt, "sort:") {
 		t.Errorf("prompt line %q must hold the input only", prompt)
@@ -593,8 +597,11 @@ func TestViewSortLabel(t *testing.T) {
 	}
 	m.width = 30
 	m.vp.SetWidth(28)
-	if edge := line(0); strings.Contains(edge, "sort:") || !strings.Contains(edge, "0/0") {
-		t.Errorf("narrow: counter edge %q, want the count without the label", edge)
+	if edge := line(0); strings.Contains(edge, "sort:") {
+		t.Errorf("narrow: top border %q, want it without the label", edge)
+	}
+	if edge := line(m.height - 3); !strings.Contains(edge, "0/0") {
+		t.Errorf("narrow: edge under the list %q, want the counter", edge)
 	}
 }
 

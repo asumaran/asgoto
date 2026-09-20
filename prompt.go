@@ -4,7 +4,7 @@ package main
 // popup the prompt is just the arrow, because the pane's title already names
 // the tool, and a placeholder says what the filter searches. Run on its own
 // in a terminal, the prompt carries the tool's name. A build that is not a
-// release says "(dev)" on the edge over the input, after the counter, where
+// release says "(dev)" on the edge over the input, after the status, where
 // the frame already keeps that kind of information.
 //
 // This file is the same in every tool of the family.
@@ -68,14 +68,14 @@ func devMark() string {
 	return stPrompt.Render("(") + stDev.Render("dev") + stPrompt.Render(")")
 }
 
-// withDevMark adds devMark after the counter on the edge over the input.
-func withDevMark(counter string) string {
+// withDevMark adds devMark after the status on the edge over the input.
+func withDevMark(status string) string {
 	mark := devMark()
 	switch {
 	case mark == "":
-		return counter
-	case counter == "":
+		return status
+	case status == "":
 		return mark
 	}
-	return counter + " " + mark
+	return status + " " + mark
 }

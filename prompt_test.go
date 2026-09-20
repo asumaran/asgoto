@@ -27,19 +27,19 @@ func TestPromptNamesTheToolOnlyOutsideThePopup(t *testing.T) {
 	}
 }
 
-func TestDevMarkFollowsTheCounter(t *testing.T) {
+func TestDevMarkFollowsTheStatus(t *testing.T) {
 	release := version
 	t.Cleanup(func() { version = release })
 
 	version = "dev"
-	if got := ansi.Strip(withDevMark("2/2 [in ~/dir]")); got != "2/2 [in ~/dir] (dev)" {
-		t.Errorf("counter = %q, want the mark after it", got)
+	if got := ansi.Strip(withDevMark("[in ~/dir]")); got != "[in ~/dir] (dev)" {
+		t.Errorf("status = %q, want the mark after it", got)
 	}
 	if got := ansi.Strip(withDevMark("")); got != "(dev)" {
-		t.Errorf("without a counter the mark stands alone: %q", got)
+		t.Errorf("without a status the mark stands alone: %q", got)
 	}
 	version = "v1.2.3"
-	if got := withDevMark("2/2"); got != "2/2" || devMark() != "" {
+	if got := withDevMark("[in ~/dir]"); got != "[in ~/dir]" || devMark() != "" {
 		t.Errorf("a release shows no mark: %q", got)
 	}
 	ti := newFilterInput("astool", "Search by path…")

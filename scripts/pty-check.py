@@ -11,7 +11,7 @@ to a herdr server or to GitHub.
 Usage: scripts/pty-check.py ./asgoto   (needs python3 + pyte)
 """
 NAME, ROWS, COLS = "asgoto", 16, 110
-import atexit, fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time
+import atexit, fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time, re
 import pyte
 
 BIN = os.path.abspath(sys.argv[1])
@@ -156,11 +156,16 @@ def actions():
 # edge, tree, bottom edge, help, border. There is no context line.
 def rows(f): return [l[1:-1].rstrip() for l in f[3:-3] if l[1:-1].strip()]
 # The input line: the prompt and what is typed (or the placeholder). A build
-# that is not a release says "(dev)" after the counter, on the edge over the
+# that is not a release says "(dev)" at the end of the edge over the
 # input; devmark() says so.
 def prompt(f): return f[1].strip("│ ").rstrip().removesuffix("(dev)").rstrip()
 def devmark(f): return any(l.rstrip("╮┤─ ").endswith("(dev)") for l in f[:4])
-def counter(f): return f[0].strip("╭╮─ ").removesuffix("(dev)").rstrip()
+def counter(f):
+    for l in f:
+        m = re.match(r"├─+ (\d+/\d+) ─[┴┤]", l)
+        if m: return m.group(1)
+    return ""
+def status(f): return f[0].strip("╭╮─ ").removesuffix("(dev)").rstrip()
 
 print("== asgoto pty driver (%dx%d) ==" % (COLS, ROWS))
 
@@ -168,10 +173,10 @@ print("== asgoto pty driver (%dx%d) ==" % (COLS, ROWS))
 s = session()
 f = s.start("asgoto ❯"); dump("open", f)
 check(prompt(f) == "asgoto ❯ Search repos, worktrees and panes…", "prompt line is clean: %r" % f[1])
-check(devmark(f), "a dev build says so after the counter, on the edge over the input")
+check(devmark(f), "a dev build says so on the edge over the input")
 check(f[0].startswith("╭") and f[-1].startswith("╰") and f[2].startswith("├"),
       "one frame: input right under the top border, no title line")
-check(counter(f) == "3/3 sort: spaces", "counter and active order on the top border: %r" % counter(f))
+check(counter(f) == "3/3" and status(f) == "sort: spaces", "counter under the list %r, active order on the top border %r" % (counter(f), status(f)))
 check("type filter" in f[-2] and "esc/q quit" in f[-2], "help shows the filter hint and the quit keys: %r" % f[-2])
 check(b"\x1b[?1049h" in s.raw, "program entered the alt screen")
 r = rows(f)
@@ -212,7 +217,7 @@ check(s.finish() == 0 and actions() == [], "q quits with an empty filter without
 s = session()
 s.start("asgoto ❯")
 f = s.send(CTRL_S, 0.5)
-check(counter(f).endswith("sort: priority"), "ctrl+s switches to the priority order: %r" % counter(f))
+check(status(f) == "sort: priority", "ctrl+s switches to the priority order: %r" % status(f))
 s.send(CTRL_S, 0.3)   # the choice is persisted; put it back
 os.write(s.master, ESC); s.pump(0.4)
 check(s.finish() == 0 and actions() == [], "esc quits without touching herdr: %r" % actions())

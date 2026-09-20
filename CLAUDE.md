@@ -47,7 +47,8 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   The wheel goes through the same code as the arrows; a click moves the
   cursor and never opens anything. The same file in every tool of the family.
 - `prompt.go` — the filter input: its prompt (with the tool's name only outside
-  herdr's popup), the placeholder, the `(dev)` mark after the counter. The same
+  herdr's popup), the placeholder, the `(dev)` mark on the edge over the
+  input. The same
   file in every tool of the family.
 - `helpfoot.go` — the help at the foot: the key that expands it, its height
   and its lines cut to the width. The same file in every tool of the family.
@@ -156,9 +157,8 @@ Non-negotiables that are not obvious from the code:
 - **Layout**: one rounded frame of sections split by shared edges, the layout
   asgitlog introduced and every picker of the family follows (the helpers live
   in `main.go` here): the filter input (the border over it carries the
-  matches/total counter and the active order), the main section (the tree,
-  full width: asgoto has no preview, so its bottom edge carries the list
-  position), and the help. A context line on top is only for what the rest of
+  active order), the main section (the tree, full width: asgoto has no
+  preview; its bottom edge carries the matches/total counter), and the help. A context line on top is only for what the rest of
   the screen cannot say (asgitlog: repo and branch); a title is not context,
   so there is none here. The list starts on screen row `listY`, one cell in
   from the left side, which is what the click-to-row math uses. Errors and
@@ -174,7 +174,7 @@ Non-negotiables that are not obvious from the code:
   pane's title (`[[panes]] title` in the manifest, the tool's name) already
   says which tool it is, and a placeholder says what the filter searches. Run
   on its own the prompt carries the tool's name. A build that is not a release
-  says `(dev)` after the counter, on the edge over the input, never inside the
+  says `(dev)` on the edge over the input, never inside the
   prompt.
   herdr sets `HERDR_PLUGIN_ENTRYPOINT_ID` for a plugin pane; that is how the
   two cases are told apart.

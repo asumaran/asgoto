@@ -2165,22 +2165,31 @@ const (
 // innerW is the width inside the frame's sides.
 func (m model) innerW() int { return max(20, m.width-2) }
 
-// hline draws a horizontal border w cells wide between the corners l and r,
-// with an optional (already styled) text set into it near the right end.
-func hline(w int, l, r, right string) string {
-	inner := max(0, w-2)
+// hline draws a horizontal border w cells wide between the corners l and r
+// (either may be empty), with optional (already styled) texts set into it
+// near each end.
+func hline(w int, l, r, left, right string) string {
+	inner := max(0, w-ansi.StringWidth(l)-ansi.StringWidth(r))
+	if left != "" {
+		left = " " + left + " "
+	}
 	if right != "" {
 		right = " " + right + " "
 	}
-	if 2+ansi.StringWidth(right) > inner {
+	if 2+ansi.StringWidth(left)+ansi.StringWidth(right) > inner {
 		right = ""
 	}
-	fill := inner - ansi.StringWidth(right)
+	if 1+ansi.StringWidth(left) > inner {
+		left = ansi.Truncate(left, max(0, inner-1), "")
+	}
+	fill := inner - ansi.StringWidth(left) - ansi.StringWidth(right)
+	lead := min(1, fill)
 	tail := 0
 	if right != "" {
-		tail = min(1, fill)
+		tail = min(1, fill-lead)
 	}
-	return stDim.Render(l+strings.Repeat("─", fill-tail)) + right + stDim.Render(strings.Repeat("─", tail)+r)
+	return stDim.Render(l+strings.Repeat("─", lead)) + left +
+		stDim.Render(strings.Repeat("─", fill-lead-tail)) + right + stDim.Render(strings.Repeat("─", tail)+r)
 }
 
 // fit truncates or pads s to exactly w cells.
@@ -2199,9 +2208,9 @@ func framed(w int, l string) string {
 func (m model) render() string {
 	w, side := m.width, stDim.Render("│")
 	out := []string{
-		hline(w, "╭", "╮", withDevMark(m.counter())),
+		hline(w, "╭", "╮", "", withDevMark(m.status())),
 		framed(w, m.ti.View()),
-		hline(w, "├", "┤", ""),
+		hline(w, "├", "┤", "", ""),
 	}
 	lines := strings.Split(m.vp.View(), "\n")
 	for i := 0; i < m.vp.Height(); i++ {
@@ -2211,15 +2220,11 @@ func (m model) render() string {
 		}
 		out = append(out, side+fit(l, m.innerW())+side)
 	}
-	pos := ""
-	if total := len(m.rows); total > m.vp.Height() {
-		pos = stDim.Render(strconv.Itoa(min(total, m.vp.YOffset()+m.vp.Height())) + "/" + strconv.Itoa(total))
-	}
-	out = append(out, hline(w, "├", "┤", pos))
+	out = append(out, hline(w, "├", "┤", "", m.counter()))
 	for _, l := range helpLines(m.help, m.keys, w-4, m.footH()) {
 		out = append(out, framed(w, l))
 	}
-	return strings.Join(append(out, hline(w, "╰", "╯", "")), "\n")
+	return strings.Join(append(out, hline(w, "╰", "╯", "", "")), "\n")
 }
 
 // footH is the height of the help, which takes more lines while `?` has it
@@ -2236,8 +2241,8 @@ func (m *model) toggleHelp() {
 	m.renderContent()
 }
 
-// counter is the rows listed out of every row of the current mode, with the
-// active order next to it; the order is dropped on a popup too narrow for it.
+// counter is the rows listed out of every row of the current mode, for the
+// edge under the list.
 func (m model) counter() string {
 	total := 0
 	for _, n := range m.allNodes {
@@ -2247,11 +2252,16 @@ func (m model) counter() string {
 			total++
 		}
 	}
-	s := stCount.Render(strconv.Itoa(len(m.rows)) + "/" + strconv.Itoa(total))
-	if m.width >= 2*sortLabelW+16 {
-		s += " " + sortLabel(m.prioritySort)
+	return stCount.Render(strconv.Itoa(len(m.rows)) + "/" + strconv.Itoa(total))
+}
+
+// status is the active order, for the edge over the input; it is dropped on a
+// popup too narrow for it.
+func (m model) status() string {
+	if m.width < 2*sortLabelW+16 {
+		return ""
 	}
-	return s
+	return sortLabel(m.prioritySort)
 }
 
 // version is the release tag; overridden at build time via
