@@ -118,13 +118,6 @@ type node struct {
 	children []*node
 }
 
-func herdrBin() string {
-	if b := os.Getenv("HERDR_BIN_PATH"); b != "" {
-		return b
-	}
-	return "herdr"
-}
-
 // ---- persisted UI state ----
 
 type persisted struct {
@@ -864,13 +857,6 @@ func loadJSON(args []string, out any) error {
 		return err
 	}
 	return json.Unmarshal(data, out)
-}
-
-func homeRel(p string) string {
-	if h, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, h) {
-		return "~" + strings.TrimPrefix(p, h)
-	}
-	return p
 }
 
 // resolveGitDir returns the git dir of the checkout at path, handling both

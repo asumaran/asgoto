@@ -24,3 +24,16 @@ func TestTruncateAndPad(t *testing.T) {
 		t.Errorf("padLeft = %q", got)
 	}
 }
+
+func TestFirstLine(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                        "",
+		"one":                     "one",
+		"\n fatal: bad ref\nhint": "fatal: bad ref",
+		"title\n\nbody":           "title",
+	} {
+		if got := firstLine(in); got != want {
+			t.Errorf("firstLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

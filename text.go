@@ -34,3 +34,12 @@ func padLeft(s string, width int) string {
 	}
 	return s
 }
+
+// firstLine is the first line of s, without the surrounding space.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
