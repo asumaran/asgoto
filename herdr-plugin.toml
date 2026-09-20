@@ -1,6 +1,6 @@
 id = "asumaran.asgoto"
 name = "asgoto"
-version = "0.19.0"
+version = "0.20.0"
 min_herdr_version = "0.7.5"
 description = "Tree-style switcher across herdr repos, worktrees and panes"
 platforms = ["linux", "macos"]

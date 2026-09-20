@@ -1,3 +1,7 @@
+## v0.20.0 (2026-09-20)
+
+* feat: copy the path with ctrl+y and add -query (fab82bd)
+
 ## v0.19.0 (2026-09-20)
 
 * refactor(state): share one state dir with the shell (0639b88)
