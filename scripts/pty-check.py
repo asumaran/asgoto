@@ -141,7 +141,7 @@ write(os.path.join(stub_bin, "gh"), "#!/bin/sh\nprintf '[]'\n", 0o755)
 def session():
     env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", HOME=home, HERDR_BIN_PATH=herdr,
                XDG_CONFIG_HOME=os.path.join(home, ".config"), PATH=stub_bin + os.pathsep + os.environ["PATH"])
-    for k in ("HERDR_SOCKET_PATH", "HERDR_PLUGIN_STATE_DIR", "HERDR_CONFIG_PATH"):
+    for k in ("HERDR_SOCKET_PATH", "HERDR_PLUGIN_STATE_DIR", "XDG_STATE_HOME", "HERDR_CONFIG_PATH"):
         env.pop(k, None)
     if os.path.exists(calls_log): os.remove(calls_log)
     return Session(env)

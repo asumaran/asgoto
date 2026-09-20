@@ -127,7 +127,8 @@ command = "asumaran.asgoto.open"
 - Runtime state (`state.json`, `prcache.json`) lives in
   `HERDR_PLUGIN_STATE_DIR` (herdr injects it; never store state in the plugin
   checkout). When run standalone (outside herdr, e.g. `./asgoto -dump`),
-  `main.go` falls back to `~/.config/herdr/asgoto-tui/`.
+  `statedir.go` falls back to the same directory
+  (`~/.local/state/herdr/plugins/asumaran.asgoto/`).
 
 ## Releasing
 
