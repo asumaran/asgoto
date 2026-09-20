@@ -25,7 +25,7 @@ command = ["scripts/open-pane.sh"]
 
 [[panes]]
 id = "picker"
-title = "Goto"
+title = "asgoto"
 placement = "popup"
 width = "55%"
 height = "90%"

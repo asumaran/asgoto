@@ -155,15 +155,20 @@ def actions():
 # One frame: top border with the counter and the active order, input, main
 # edge, tree, bottom edge, help, border. There is no context line.
 def rows(f): return [l[1:-1].rstrip() for l in f[3:-3] if l[1:-1].strip()]
-def prompt(f): return f[1].strip("│ ").rstrip()
-def counter(f): return f[0].strip("╭╮─ ")
+# The input line: the prompt and what is typed (or the placeholder). A build
+# that is not a release says "(dev)" after the counter, on the edge over the
+# input; devmark() says so.
+def prompt(f): return f[1].strip("│ ").rstrip().removesuffix("(dev)").rstrip()
+def devmark(f): return any(l.rstrip("╮┤─ ").endswith("(dev)") for l in f[:4])
+def counter(f): return f[0].strip("╭╮─ ").removesuffix("(dev)").rstrip()
 
 print("== asgoto pty driver (%dx%d) ==" % (COLS, ROWS))
 
 # ---------- run 1: tree, cursor on the current space, filter, select ----------
 s = session()
-f = s.start("asgoto (dev) ❯"); dump("open", f)
-check(prompt(f) == "asgoto (dev) ❯", "prompt line is clean: %r" % f[1])
+f = s.start("asgoto ❯"); dump("open", f)
+check(prompt(f) == "asgoto ❯ Search repos, worktrees and panes…", "prompt line is clean: %r" % f[1])
+check(devmark(f), "a dev build says so after the counter, on the edge over the input")
 check(f[0].startswith("╭") and f[-1].startswith("╰") and f[2].startswith("├"),
       "one frame: input right under the top border, no title line")
 check(counter(f) == "3/3 sort: spaces", "counter and active order on the top border: %r" % counter(f))
@@ -183,7 +188,7 @@ check(actions() == ["workspace focus w2"], "enter focuses the workspace: %r" % a
 
 # ---------- run 2: ctrl+t lists panes, enter on one focuses it ----------
 s = session()
-s.start("asgoto (dev) ❯")
+s.start("asgoto ❯")
 f = s.send(CTRL_T, 0.6); dump("panes", f)
 r = rows(f)
 check(any("claude" in x and "working" in x for x in r), "ctrl+t lists the agent pane with its status: %r" % r)
@@ -194,7 +199,7 @@ check(actions() == ["agent focus w2:p1"], "without a socket the pane is focused 
 
 # ---------- run 3: mouse: a click moves the cursor, the wheel walks it, q quits ----------
 s = session()
-s.start("asgoto (dev) ❯")
+s.start("asgoto ❯")
 f = s.send(b"\x1b[<0;6;4M\x1b[<0;6;4m", 0.5)   # SGR press+release on the first tree line
 r = rows(f)
 check("▌" in r[0] and s.proc.poll() is None, "a click moves the cursor without selecting: %r" % r)
@@ -205,7 +210,7 @@ check(s.finish() == 0 and actions() == [], "q quits with an empty filter without
 
 # ---------- run 4: ctrl+s flips the sort label, esc does nothing ----------
 s = session()
-s.start("asgoto (dev) ❯")
+s.start("asgoto ❯")
 f = s.send(CTRL_S, 0.5)
 check(counter(f).endswith("sort: priority"), "ctrl+s switches to the priority order: %r" % counter(f))
 s.send(CTRL_S, 0.3)   # the choice is persisted; put it back

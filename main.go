@@ -1433,9 +1433,7 @@ type model struct {
 }
 
 var (
-	stPrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
 	// stDev colors the "(dev)" marker shown in the prompt for non-release builds.
-	stDev = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
 
 	// Active-order label on the prompt line (see sortLabel).
 	stDim   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
@@ -1652,16 +1650,6 @@ func prPrefix(n *node) string {
 		}
 	}
 	return s + "  "
-}
-
-// promptText builds the textinput prompt. Release builds (version stamped from a
-// vX.Y.Z tag) show "asgoto ❯ "; non-release builds (`dev` / `local-<sha>`) insert
-// an orange "(dev)" marker so it's obvious you're not on a published version.
-func promptText() string {
-	if strings.HasPrefix(version, "v") {
-		return stPrompt.Render("asgoto ❯ ")
-	}
-	return stPrompt.Render("asgoto (") + stDev.Render("dev") + stPrompt.Render(") ❯ ")
 }
 
 // sortLabel names the active order on the prompt line's right edge: unlike
@@ -2042,8 +2030,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vp.SetWidth(m.innerW())
 		m.help.SetWidth(max(0, msg.Width-4))
 		m.vp.SetHeight(max(1, msg.Height-frameRows-m.footH())) // the frame's own lines + help
-		// Input inside the frame's padding (2 = cursor cell + a gap).
-		m.ti.SetWidth(max(1, m.innerW()-2-lipgloss.Width(m.ti.Prompt)-2))
+		sizeInput(&m.ti, m.width-4)
 		m.renderContent()
 		return m, nil
 
@@ -2255,7 +2242,7 @@ func framed(w int, l string) string {
 func (m model) render() string {
 	w, side := m.width, stDim.Render("│")
 	out := []string{
-		hline(w, "╭", "╮", m.counter()),
+		hline(w, "╭", "╮", withDevMark(m.counter())),
 		framed(w, m.ti.View()),
 		hline(w, "├", "┤", ""),
 	}
@@ -2456,13 +2443,7 @@ func main() {
 		return
 	}
 
-	ti := textinput.New()
-	ti.Prompt = promptText()
-	tiStyles := ti.Styles()
-	tiStyles.Focused.Prompt = lipgloss.NewStyle() // colors are already baked into the prompt
-	tiStyles.Blurred.Prompt = lipgloss.NewStyle()
-	ti.SetStyles(tiStyles)
-	ti.Focus()
+	ti := newFilterInput("asgoto", "Search repos, worktrees and panes…")
 
 	m := model{
 		roots:         roots,

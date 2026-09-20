@@ -581,7 +581,7 @@ func TestViewSortLabel(t *testing.T) {
 	// lipgloss v2 always emits ANSI, so the text is compared stripped.
 	line := func(y int) string { return strings.Split(ansi.Strip(m.render()), "\n")[y] }
 
-	if edge := line(0); !strings.HasSuffix(edge, " 0/0 sort: spaces ─╮") {
+	if edge := line(0); !strings.HasSuffix(edge, " 0/0 sort: spaces (dev) ─╮") { // tests run an unstamped build
 		t.Errorf("default: counter edge %q, want it to end in the label", edge)
 	}
 	if prompt := line(1); !strings.HasPrefix(prompt, "│ asgoto > herdr") || strings.Contains(prompt, "sort:") {

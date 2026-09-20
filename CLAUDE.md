@@ -37,6 +37,9 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   score. The same file in every
   tool of the family.
   With `highlight.go` it is the exception to the single file: both are shared.
+- `prompt.go` — the filter input: its prompt (with the tool's name only outside
+  herdr's popup), the placeholder, the `(dev)` mark after the counter. The same
+  file in every tool of the family.
 - `helpfoot.go` — the help at the foot: the key that expands it, its height
   and its lines cut to the width. The same file in every tool of the family.
 - `listnav.go` — `listNav`: the keys that move the cursor through a list and
@@ -157,6 +160,15 @@ Non-negotiables that are not obvious from the code:
   `home`/`end` the ends. `home`/`end` are taken from the filter input's caret
   on purpose (`←`/`→` and `ctrl+e` still move it). The preview scrolls with
   `shift+↑`/`shift+↓` only. The keys are listed in the expanded help.
+- **The filter input** comes from `prompt.go` (the same file in every tool of
+  the family). Inside herdr's popup the prompt is the arrow alone, because the
+  pane's title (`[[panes]] title` in the manifest, the tool's name) already
+  says which tool it is, and a placeholder says what the filter searches. Run
+  on its own the prompt carries the tool's name. A build that is not a release
+  says `(dev)` after the counter, on the edge over the input, never inside the
+  prompt.
+  herdr sets `HERDR_PLUGIN_ENTRYPOINT_ID` for a plugin pane; that is how the
+  two cases are told apart.
 - **Help**: the line at the foot shows the tool's own actions, `? help` and the
   quit keys; `?` expands it into every key in columns and the main section
   gives way (`helpfoot.go`, the same file in every tool of the family). `?`
