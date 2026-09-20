@@ -571,6 +571,41 @@ func TestResortKeepsCorporaParallel(t *testing.T) {
 	}
 }
 
+// TestQueryTermsFollowTheTree covers a query of several terms: they match in
+// any order, and a term an ancestor matches counts for the rows under it.
+func TestQueryTermsFollowTheTree(t *testing.T) {
+	fix := &node{kind: "worktree", label: "fix-login"}
+	docs := &node{kind: "worktree", label: "docs"}
+	herdr := &node{kind: "repo", label: "herdr", children: []*node{fix, docs}, expanded: true}
+	other := &node{kind: "repo", label: "shop", children: []*node{{kind: "worktree", label: "fix-cart"}}, expanded: true}
+	roots := []*node{herdr, other}
+	stampOrder(roots)
+	m := model{roots: roots, ti: textinput.New(), keys: defaultKeys()}
+	m.resort()
+
+	for _, q := range []string{"herdr fix", "fix herdr"} {
+		m.ti.SetValue(q)
+		m.applyFilter()
+		var matched []string
+		for _, r := range m.rows {
+			if r.match {
+				matched = append(matched, r.n.label)
+			}
+		}
+		if len(matched) != 1 || matched[0] != "fix-login" {
+			t.Errorf("%q matched %v, want only fix-login (under herdr)", q, matched)
+		}
+		if len(m.rows) != 2 || m.rows[0].n != herdr || m.rows[1].n != fix {
+			t.Errorf("%q: rows must be herdr and its fix-login worktree", q)
+		}
+	}
+	m.ti.SetValue("'")
+	m.applyFilter()
+	if len(m.rows) != 5 {
+		t.Errorf("a bare prefix is not a term yet: %d rows, want the whole tree (5)", len(m.rows))
+	}
+}
+
 // TestViewSortLabel covers the active-order label: set into the frame's top
 // border, naming the mode, and dropped when the popup is too narrow for it.
 // The counter sits on the edge under the list.

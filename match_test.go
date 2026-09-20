@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/sahilm/fuzzy"
@@ -74,5 +75,60 @@ func TestFindTightDoesNotRewardShortStrings(t *testing.T) {
 	}
 	if ms[0].Index != 0 || ms[1].Index != 1 || ms[2].Index != 2 {
 		t.Errorf("equal scores keep the order they came in: %+v", ms)
+	}
+}
+
+func TestQueryTerms(t *testing.T) {
+	got := queryTerms("  Fix ~LoGin 'Cart ' ~ ", true)
+	want := []qterm{{"Fix", true}, {"LoGin", true}, {"cart", false}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("fuzzy by default: %+v, want %+v", got, want)
+	}
+	got = queryTerms("Fix ~LoGin 'Cart", false)
+	want = []qterm{{"fix", false}, {"LoGin", true}, {"cart", false}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("substring by default: %+v, want %+v", got, want)
+	}
+}
+
+func TestFindFieldsTermsInAnyOrderAcrossFields(t *testing.T) {
+	titles := []string{"fix login flow", "update readme", "login page copy"}
+	branches := []string{"fix/login", "docs/readme", "feat/copy"}
+	for _, q := range []string{"login fix", "fix login"} {
+		hits := findFields(q, titles, branches)
+		if len(hits) != 1 {
+			t.Fatalf("%q: hits %v, want only item 0", q, hits)
+		}
+		if h := hits[0]; !reflect.DeepEqual(h.Idx[0], []int{0, 1, 2, 4, 5, 6, 7, 8}) {
+			t.Errorf("%q: title offsets %v, want both words", q, h.Idx[0])
+		}
+	}
+	// a term may match one field and the next another
+	hits := findFields("readme docs", titles, branches)
+	if h, ok := hits[1]; len(hits) != 1 || !ok || len(h.Idx[0]) != 6 || len(h.Idx[1]) != 4 {
+		t.Errorf("terms across fields: %+v", hits)
+	}
+	one, two := findFields("login", titles, branches)[0], findFields("login fix", titles, branches)[0]
+	if two.Score <= one.Score {
+		t.Errorf("a second matching term must add to the score: %d then %d", one.Score, two.Score)
+	}
+}
+
+func TestFindFieldsExactTermAndBarePrefix(t *testing.T) {
+	titles := []string{"site orange tv indexable", "indexable pages", "in the dex table"}
+	if hits := findFields("idxbl", titles); len(hits) != 3 {
+		t.Errorf("fuzzy term: %v, want every string holding the letters in order", hits)
+	}
+	if hits := findFields("'dex", titles); len(hits) != 3 {
+		t.Errorf("'dex: %v, want every string holding dex", hits)
+	}
+	if hits := findFields("'idxbl", titles); len(hits) != 0 {
+		t.Errorf("'idxbl occurs nowhere in one piece: %v", hits)
+	}
+	if hits := findFields("'", titles); len(hits) != 3 {
+		t.Errorf("a bare prefix is not a term yet and must not empty the list: %v", hits)
+	}
+	if hits := findFields("pages '", titles); len(hits) != 1 {
+		t.Errorf("a bare prefix after a term: %v", hits)
 	}
 }

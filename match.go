@@ -13,6 +13,12 @@ package main
 // between equals, not the length of a title: findTight gives that charge
 // back, and a score says only how good the match is.
 //
+// A query is split on whitespace and every term must match, in any order and
+// in any of the fields an item is searched by. A term is fuzzy in the pickers
+// and a substring in asgitlog (its list keeps the log's order, so nothing
+// would push a scattered match down); ~term asks for fuzzy and 'term for a
+// substring wherever the other one is the default.
+//
 // This file is the same in every tool of the family.
 
 import (
@@ -23,6 +29,144 @@ import (
 
 	"github.com/sahilm/fuzzy"
 )
+
+// qterm is one term of a query. text is lowercased unless the term is fuzzy
+// (the fuzzy matcher folds case itself).
+type qterm struct {
+	text  string
+	fuzzy bool
+}
+
+// queryTerms splits q into its terms. fuzzyByDefault says what a term without
+// a prefix is; a prefix standing alone is not a term yet.
+func queryTerms(q string, fuzzyByDefault bool) []qterm {
+	var terms []qterm
+	for _, f := range strings.Fields(q) {
+		isFuzzy := fuzzyByDefault
+		if rest, ok := strings.CutPrefix(f, "~"); ok {
+			f, isFuzzy = rest, true
+		} else if rest, ok := strings.CutPrefix(f, "'"); ok {
+			f, isFuzzy = rest, false
+		}
+		if f == "" {
+			continue
+		}
+		if !isFuzzy {
+			f = strings.ToLower(f)
+		}
+		terms = append(terms, qterm{text: f, fuzzy: isFuzzy})
+	}
+	return terms
+}
+
+// fieldsHit is what a query found in one item. Field is the field the
+// best-scoring term matched in. Idx holds, per field, the byte offsets matched
+// by the terms that did best in that field; Any holds the offsets of every
+// term that matched there at all, best field or not. Both are sorted.
+type fieldsHit struct {
+	Score int
+	Field int
+	Idx   [][]int
+	Any   [][]int
+}
+
+// findFields matches q against items searched by several parallel fields
+// (fields[f][i] is field f of item i) and returns the items every term matched
+// in some field, keyed by item. A term scores what its best field scored, the
+// earlier field winning a tie, and an item scores the sum of its terms. A
+// query with no terms yet matches every item.
+func findFields(q string, fields ...[]string) map[int]fieldsHit {
+	hits := map[int]fieldsHit{}
+	if len(fields) == 0 {
+		return hits
+	}
+	blank := func() fieldsHit {
+		return fieldsHit{Idx: make([][]int, len(fields)), Any: make([][]int, len(fields))}
+	}
+	terms := queryTerms(q, true)
+	if len(terms) == 0 {
+		for i := range fields[0] {
+			hits[i] = blank()
+		}
+		return hits
+	}
+	type termBest struct{ score, field int }
+	top := map[int]int{} // the best term score seen per item, for Field
+	for n, t := range terms {
+		best := map[int]termBest{}
+		found := map[int]fieldsHit{}
+		for f, corpus := range fields {
+			for _, mt := range findTerm(t, corpus) {
+				h, ok := found[mt.Index]
+				if !ok {
+					h = blank()
+				}
+				h.Any[f] = mt.MatchedIndexes
+				if b, seen := best[mt.Index]; !seen || mt.Score > b.score {
+					best[mt.Index] = termBest{mt.Score, f}
+				}
+				found[mt.Index] = h
+			}
+		}
+		next := map[int]fieldsHit{}
+		for i, got := range found {
+			h, ok := hits[i]
+			if n == 0 {
+				h, ok = blank(), true
+			}
+			if !ok {
+				continue // an earlier term did not match this item
+			}
+			b := best[i]
+			h.Score += b.score
+			if top[i] < b.score || n == 0 {
+				top[i], h.Field = b.score, b.field
+			}
+			h.Idx[b.field] = mergeIdx(h.Idx[b.field], got.Any[b.field])
+			for f := range fields {
+				h.Any[f] = mergeIdx(h.Any[f], got.Any[f])
+			}
+			next[i] = h
+		}
+		hits = next
+	}
+	return hits
+}
+
+// findTerm is findTight for one term: a term that is not fuzzy keeps only the
+// strings it occurs in, which tighten has already moved the match onto.
+func findTerm(t qterm, corpus []string) fuzzy.Matches {
+	ms := findTight(t.text, corpus)
+	if t.fuzzy {
+		return ms
+	}
+	kept := ms[:0]
+	for _, mt := range ms {
+		if strings.Contains(strings.ToLower(mt.Str), t.text) {
+			kept = append(kept, mt)
+		}
+	}
+	return kept
+}
+
+// mergeIdx is the sorted union of two sets of offsets.
+func mergeIdx(a, b []int) []int {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[int]bool, len(a)+len(b))
+	out := make([]int, 0, len(a)+len(b))
+	for _, s := range [][]int{a, b} {
+		for _, i := range s {
+			if !seen[i] {
+				seen[i] = true
+				out = append(out, i)
+			}
+		}
+	}
+	sort.Ints(out)
+	return out
+}
 
 // findTight is fuzzy.Find with every match tightened and its length charge
 // given back, best score first.

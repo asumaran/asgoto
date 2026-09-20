@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1690,8 +1691,18 @@ func kindBonus(kind string) int {
 }
 
 func (m *model) applyFilter() {
-	q := strings.ToLower(m.ti.Value())
-	filtering := q != ""
+	// One set of hits per term of the query (see queryTerms): branches and
+	// ticket/PR metadata are searched next to the label, so "feat/x" finds a
+	// worktree whose label is the "feat-x" folder slug and "1234" the row
+	// showing PR #1234. Only label matches are highlighted: the other offsets
+	// point into text the row does not show.
+	var perTerm []map[int]fieldsHit
+	for _, tok := range strings.Fields(strings.ToLower(m.ti.Value())) {
+		if len(queryTerms(tok, true)) > 0 {
+			perTerm = append(perTerm, findFields(tok, m.lowerLabels, m.lowerBranches, m.lowerMetas))
+		}
+	}
+	filtering := len(perTerm) > 0
 
 	type hit struct {
 		score int
@@ -1699,21 +1710,34 @@ func (m *model) applyFilter() {
 	}
 	hits := map[*node]hit{}
 	if filtering {
-		for _, mt := range findTight(q, m.lowerLabels) {
-			hits[m.allNodes[mt.Index]] = hit{mt.Score, mt.MatchedIndexes}
+		index := make(map[*node]int, len(m.allNodes))
+		for i, n := range m.allNodes {
+			index[n] = i
 		}
-		// Branches and ticket/PR metadata are matched separately so queries
-		// like "feat/x" find a worktree whose label is the "feat-x" folder
-		// slug, and "1234" finds the row showing PR #1234. These hits carry
-		// no MatchedIndexes: those indexes point into the branch/meta text,
-		// not the rendered label, so there is nothing to highlight.
-		for _, corpus := range [][]string{m.lowerBranches, m.lowerMetas} {
-			for _, mt := range findTight(q, corpus) {
-				n := m.allNodes[mt.Index]
-				if h, ok := hits[n]; !ok || mt.Score > h.score {
-					hits[n] = hit{mt.Score, nil}
+		// The tree is part of what a row says: "herdr fix" finds the fix
+		// worktree of the herdr repo. A node is a hit when it matches a term
+		// itself and every other term matches it or one of its ancestors.
+		var mark func(n *node, above []bool)
+		mark = func(n *node, above []bool) {
+			covered := slices.Clone(above)
+			own, all, h := false, true, hit{}
+			for t, found := range perTerm {
+				if fh, ok := found[index[n]]; ok {
+					own, covered[t] = true, true
+					h.score += fh.Score
+					h.idx = mergeIdx(h.idx, fh.Idx[0])
 				}
+				all = all && covered[t]
 			}
+			if own && all {
+				hits[n] = h
+			}
+			for _, c := range n.children {
+				mark(c, covered)
+			}
+		}
+		for _, r := range m.roots {
+			mark(r, make([]bool, len(perTerm)))
 		}
 	}
 

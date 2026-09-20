@@ -92,7 +92,7 @@ Around each name:
 
 ## Search
 
-Typing filters the tree with fuzzy matching. The query is matched against the
+Typing filters the tree with fuzzy matching. A query of several words matches them in any order (`login fix` finds "fix login flow"), and a word starting with `'` must occur as typed instead of fuzzily (`'dex`). In the tree a word may match the row and another one of its parents (`herdr fix` finds the fix worktree of herdr). The query is matched against the
 row name, the branch, the worktree folder, the Jira ticket, the PR number and
 the listening ports, so "1234" finds the row showing #1234 and "3000" finds
 whoever holds that port. Matching rows keep their ancestors visible and the
