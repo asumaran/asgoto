@@ -1,3 +1,7 @@
+## v0.21.0 (2026-09-20)
+
+* feat(ui): open an options and keys panel with f1 (10f6455)
+
 ## v0.20.0 (2026-09-20)
 
 * feat: copy the path with ctrl+y and add -query (fab82bd)
