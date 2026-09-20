@@ -1,3 +1,9 @@
+## v0.19.0 (2026-09-20)
+
+* refactor(state): share one state dir with the shell (0639b88)
+* feat(keys): show panes with ctrl+a (daa57b7)
+* feat(search): match query terms in any order (fd4c58e)
+
 ## v0.18.0 (2026-09-19)
 
 * feat(ui): move the counter under the list (da8d812)
