@@ -36,7 +36,16 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   query occurs whole, that occurrence is the match, for the highlight and the
   score. The same file in every
   tool of the family.
-  With `highlight.go` it is the exception to the single file: both are shared.
+  The files shared with the rest of the family (listed here) are the
+  exception to the single file.
+- `text.go` — `truncate`, `padRight`, `padLeft`: fitting text, styled or not,
+  into cells. The same file in every tool of the family.
+- `statedir.go` — `stateDirFor`: the state dir herdr injects, or a fixed path
+  under the config home when the tool runs on its own. The same file in every
+  tool of the family that keeps state.
+- `listmouse.go` — `inList`, `rowUnder`, `wheelKey`: the mouse over the list.
+  The wheel goes through the same code as the arrows; a click moves the
+  cursor and never opens anything. The same file in every tool of the family.
 - `prompt.go` — the filter input: its prompt (with the tool's name only outside
   herdr's popup), the placeholder, the `(dev)` mark after the counter. The same
   file in every tool of the family.

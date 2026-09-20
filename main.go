@@ -132,21 +132,8 @@ type persisted struct {
 	PrioritySort bool `json:"priority_sort"`
 }
 
-func stateFile() string {
-	// Running as a herdr plugin: herdr creates and injects a per-plugin state
-	// dir; runtime state must live there, not in the plugin checkout.
-	if dir := os.Getenv("HERDR_PLUGIN_STATE_DIR"); dir != "" {
-		return filepath.Join(dir, "state.json")
-	}
-	// Standalone fallback (fixed-path install at ~/.config/herdr/asgoto-tui).
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			base = filepath.Join(h, ".config")
-		}
-	}
-	return filepath.Join(base, "herdr", "asgoto-tui", "state.json")
-}
+// stateFile is where asgoto remembers its settings.
+func stateFile() string { return filepath.Join(stateDirFor("asgoto"), "state.json") }
 
 func loadState() persisted {
 	var s persisted
@@ -1986,15 +1973,6 @@ func rightColumn(segs []seg, avail int, styled bool) string {
 	return pad + strings.Join(parts, " ")
 }
 
-// truncate shortens s to at most max runes, ending in "…" when cut.
-func truncate(s string, max int) string {
-	rs := []rune(s)
-	if len(rs) <= max {
-		return s
-	}
-	return string(rs[:max-1]) + "…"
-}
-
 func (m *model) renderContent() {
 	var b strings.Builder
 	for i, r := range m.rows {
@@ -2090,15 +2068,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseWheelMsg:
 		// There is no preview to scroll: the wheel walks the cursor.
-		switch msg.Button {
-		case tea.MouseWheelUp:
-			if m.cursor > 0 {
-				m.cursor--
-				m.renderContent()
-			}
-		case tea.MouseWheelDown:
-			if m.cursor < len(m.rows)-1 {
-				m.cursor++
+		if k, ok := wheelKey(msg); ok {
+			if to := m.keys.Nav.move(k, m.cursor, len(m.rows), m.vp.Height(), nil); to != m.cursor {
+				m.cursor = to
 				m.renderContent()
 			}
 		}
@@ -2107,11 +2079,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// A left click on a row moves the cursor; it never selects, so a stray
 		// click cannot switch spaces (same reasoning as asgotopr).
-		if msg.Button != tea.MouseLeft || msg.X < 1 || msg.X > m.innerW() ||
-			msg.Y < listY || msg.Y >= listY+m.vp.Height() {
+		if msg.Button != tea.MouseLeft || !inList(msg.X, msg.Y, listY, m.innerW(), m.vp.Height()) {
 			return m, nil
 		}
-		if i := msg.Y - listY + m.vp.YOffset(); i >= 0 && i < len(m.rows) && i != m.cursor {
+		if i, ok := rowUnder(msg.Y, listY, m.vp.YOffset(), len(m.rows)); ok && i != m.cursor {
 			m.cursor = i
 			m.renderContent()
 		}
