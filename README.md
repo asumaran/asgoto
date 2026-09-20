@@ -55,6 +55,7 @@ runtime state (`state.json`, `prcache.json`) lives.
 | `enter` | switch to the selected row |
 | `ctrl+a` | show or hide panes |
 | `ctrl+s` | switch between space order and priority order |
+| `ctrl+y` | copy the path of the selected row to the clipboard (a repo's or worktree's checkout, a pane's working directory); the help line confirms it |
 | `esc`, `ctrl+c`, `q` with an empty filter | quit |
 | click, mouse wheel | move the cursor (never selects) |
 
@@ -121,6 +122,13 @@ query changes nothing. `enter` on a repo or worktree switches to that space
 without changing which pane is focused inside it. You land where you left it,
 and the agent pane is never autofocused. `enter` on a pane focuses that pane.
 
+`ctrl+y` copies the directory of the row under the cursor instead of going
+there: the checkout of a repo or worktree, the working directory of a pane.
+The clipboard gets the absolute path and the help line says `copied ~/...`
+for a moment, or `nothing to copy` when herdr reported no directory for the
+row. `ASGOTO_CLIPBOARD` replaces the clipboard command the path is fed to
+(`pbcopy` on macOS, else `wl-copy`, `xclip` or `xsel`).
+
 ## Optional tools
 
 PR numbers need `gh` (authenticated) and a GitHub remote. Ports need `lsof`.
@@ -136,10 +144,21 @@ costs about 1s of CPU, which `core.fsmonitor=true` removes.
 ```bash
 go build -o asgoto .             # local build inside the repo
 ./asgoto -dump                   # print the tree (no TUI), for debugging without a TTY
+./asgoto -dump -query shop       # the rows the filter lists for a query, the matches with their scores
 ./asgoto -version                # print the embedded version
 go vet ./... && go test ./...
 scripts/pty-check.py ./asgoto   # end-to-end TUI check on a pty (python3 + pyte)
 ```
+
+`-dump` builds the tree the way the popup does (same herdr calls, same order)
+and prints one line per node, indented: ticket and PR, the label, then the
+kind, the status, the id `enter` would focus and what the right column shows.
+It lists every pane, the ones the popup hides too. With `-query` it prints
+the rows the filter lists instead, in the mode the popup would open in
+(`ctrl+a` and `ctrl+s` are remembered): `>` marks the match the cursor lands
+on, `*` the other matches, each with its score, and unmarked rows are the
+parents kept for context. If herdr cannot be reached it prints the error and
+exits 1. Both only read.
 
 It is a single static Go binary with no runtime deps: Bubble Tea v2 and bubbles v2
 (`textinput`, `viewport`, `key`, `help`) for the TUI, lipgloss v2 for styling

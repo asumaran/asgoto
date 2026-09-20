@@ -3,6 +3,7 @@ package main
 // Fitting text into cells. This file is the same in every tool of the family.
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -42,4 +43,12 @@ func firstLine(s string) string {
 		s = s[:i]
 	}
 	return s
+}
+
+// plural is n and its noun, with an s unless n is 1.
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(n) + " " + noun + "s"
 }

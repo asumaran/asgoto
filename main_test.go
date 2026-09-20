@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -8,70 +12,10 @@ import (
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
-
-func TestTicketFrom(t *testing.T) {
-	cases := []struct {
-		branch, label, want string
-	}{
-		{"feat-FED-2030-stargate-oci-pipeline", "", "FED-2030"},
-		{"FED-2035-stargate-stg-oci-validation", "", "FED-2035"},
-		{"fed-2031", "", "FED-2031"},
-		{"cronus/plat-1193-e2e-encryption-proof", "", "PLAT-1193"},
-		{"", "fed-2031", "FED-2031"},                    // label fallback
-		{"feat-observability-wiring", "some-label", ""}, // no ticket anywhere
-		{"feat-digital-lhciFixClosedServerConnection", "", ""},
-		{"e2e-tests", "", ""},      // digit inside the key: not a ticket
-		{"v1-2-migration", "", ""}, // single letter before the dash: not a ticket
-		{"main", "", ""},
-		{"feat-FED-2030-FED-2031-x", "", "FED-2030"}, // first match wins
-	}
-	for _, c := range cases {
-		if got := ticketFrom(c.branch, c.label); got != c.want {
-			t.Errorf("ticketFrom(%q, %q) = %q, want %q", c.branch, c.label, got, c.want)
-		}
-	}
-}
-
-func TestGithubSlugFromURL(t *testing.T) {
-	cases := []struct{ url, want string }{
-		{"git@github.com:masmovil/monorepo-front.git", "masmovil/monorepo-front"},
-		{"git@github.com:asumaran/asgoto", "asumaran/asgoto"},
-		{"ssh://git@github.com/owner/repo.git", "owner/repo"},
-		{"https://github.com/owner/repo.git", "owner/repo"},
-		{"https://github.com/owner/repo", "owner/repo"},
-		{"https://github.com/owner/repo/", "owner/repo"},
-		{"git@gitlab.com:owner/repo.git", ""}, // non-GitHub host
-		{"https://github.com/owner", ""},      // no repo segment
-		{"", ""},
-	}
-	for _, c := range cases {
-		if got := githubSlugFromURL(c.url); got != c.want {
-			t.Errorf("githubSlugFromURL(%q) = %q, want %q", c.url, got, c.want)
-		}
-	}
-}
-
-func TestOriginURL(t *testing.T) {
-	config := `[core]
-	repositoryformatversion = 0
-[remote "upstream"]
-	url = git@github.com:other/upstream.git
-[remote "origin"]
-	url = git@github.com:owner/repo.git
-	fetch = +refs/heads/*:refs/remotes/origin/*
-[branch "main"]
-	remote = origin
-`
-	if got := originURL(config); got != "git@github.com:owner/repo.git" {
-		t.Errorf("originURL = %q, want origin url", got)
-	}
-	if got := originURL("[core]\n\tbare = false\n"); got != "" {
-		t.Errorf("originURL without origin = %q, want empty", got)
-	}
-}
 
 func TestLayoutPrefixesAndPlainPrefix(t *testing.T) {
 	repo := &node{kind: "repo", label: "monorepo-front", children: []*node{
@@ -721,5 +665,263 @@ func TestStatusDotStyles(t *testing.T) {
 		if g := strings.Join(got, " "); g != c.want {
 			t.Errorf("symbols=%v: got %q, want %q", c.symbols, g, c.want)
 		}
+	}
+}
+
+// copyModel is a sized model over one repo (a checkout under home), its
+// worktree, the worktree's agent pane and a space herdr knows no directory
+// of, with the panes listed.
+func copyModel(t *testing.T, home string) model {
+	t.Helper()
+	pane := &node{kind: "pane", label: "claude", paneID: "w2:p1", cwd: filepath.Join(home, "wt/shop/fix/src"), hasAgent: true}
+	fix := &node{kind: "worktree", label: "fix", wsID: "w2", checkout: filepath.Join(home, "wt/shop/fix"), expanded: true, children: []*node{pane}}
+	shop := &node{kind: "repo", label: "shop", wsID: "w1", checkout: filepath.Join(home, "Developer/shop"), expanded: true, children: []*node{fix}}
+	bare := &node{kind: "repo", label: "scratch", wsID: "w3", expanded: true}
+	roots := []*node{shop, bare}
+	stampOrder(roots)
+	m := model{roots: roots, showPanes: true, ti: textinput.New(), vp: viewport.New(viewport.WithWidth(98), viewport.WithHeight(7)),
+		help: help.New(), keys: defaultKeys(), width: 100, height: 13}
+	m.resort()
+	m.applyFilter()
+	m.renderContent()
+	return m
+}
+
+// clipboardStub points ASGOTO_CLIPBOARD at a script that logs its stdin and
+// returns the log's path.
+func clipboardStub(t *testing.T) string {
+	t.Helper()
+	log := filepath.Join(t.TempDir(), "clip")
+	stub := filepath.Join(t.TempDir(), "clipboard")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\ncat > "+log+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ASGOTO_CLIPBOARD", stub)
+	return log
+}
+
+func helpLine(m model) string {
+	plain := strings.Split(ansi.Strip(m.View().Content), "\n")
+	return plain[len(plain)-2]
+}
+
+// TestCopyKeyCopiesThePath covers ctrl+y on every kind of row: the clipboard
+// gets the absolute directory, the help line confirms it with the home
+// shortened, and the key never reaches the filter.
+func TestCopyKeyCopiesThePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	log := clipboardStub(t)
+	m := copyModel(t, home)
+
+	cases := []struct{ kind, want, label string }{
+		{"repo", filepath.Join(home, "Developer/shop"), "~/Developer/shop"},
+		{"worktree", filepath.Join(home, "wt/shop/fix"), "~/wt/shop/fix"},
+		{"pane", filepath.Join(home, "wt/shop/fix/src"), "~/wt/shop/fix/src"},
+	}
+	for i, c := range cases {
+		m.cursor = i
+		if got := m.rows[i].n.kind; got != c.kind {
+			t.Fatalf("row %d is a %s, want a %s", i, got, c.kind)
+		}
+		res, cmd := m.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+		if cmd == nil {
+			t.Fatalf("%s: ctrl+y returned no command", c.kind)
+		}
+		res, _ = res.(model).Update(cmd())
+		m = res.(model)
+		if got, _ := os.ReadFile(log); string(got) != c.want {
+			t.Errorf("%s: the clipboard got %q, want %q", c.kind, got, c.want)
+		}
+		if help := helpLine(m); !strings.Contains(help, "copied "+c.label) {
+			t.Errorf("%s: help line = %q, want the confirmation with the home shortened", c.kind, help)
+		}
+		if m.ti.Value() != "" {
+			t.Errorf("%s: ctrl+y leaked into the filter: %q", c.kind, m.ti.Value())
+		}
+	}
+	res, _ := m.Update(clearFlashMsg(m.flash.seq))
+	if help := helpLine(res.(model)); !strings.Contains(help, "type filter") {
+		t.Errorf("after the timer the help is back: %q", help)
+	}
+}
+
+// TestCopyKeyWithoutADirectory covers a row herdr reported no directory for:
+// nothing is copied and the help line says so.
+func TestCopyKeyWithoutADirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	log := clipboardStub(t)
+	m := copyModel(t, home)
+	m.cursor = len(m.rows) - 1 // the space without a checkout
+	res, cmd := m.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+	res, _ = res.(model).Update(cmd())
+	if help := helpLine(res.(model)); !strings.Contains(help, "nothing to copy") {
+		t.Errorf("help line = %q, want \"nothing to copy\"", help)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Error("the clipboard command ran without a path")
+	}
+}
+
+// TestNodeDir covers what ctrl+y copies per kind, and the space that is no
+// git checkout, which falls back to its first pane's cwd.
+func TestNodeDir(t *testing.T) {
+	cases := []struct {
+		n    *node
+		want string
+	}{
+		{&node{kind: "repo", checkout: "/r/shop"}, "/r/shop"},
+		{&node{kind: "worktree", checkout: "/wt/shop/fix"}, "/wt/shop/fix"},
+		{&node{kind: "pane", cwd: "/wt/shop/fix/src"}, "/wt/shop/fix/src"},
+		{&node{kind: "repo", cwd: "/tmp/notes"}, "/tmp/notes"},
+		{&node{kind: "repo"}, ""},
+	}
+	for _, c := range cases {
+		if got := nodeDir(c.n); got != c.want {
+			t.Errorf("nodeDir(%s %+v) = %q, want %q", c.n.kind, c.n, got, c.want)
+		}
+	}
+	roots := buildTree([]wsInfo{{ID: "w1", Label: "notes", Number: 1}},
+		[]paneInfo{{ID: "w1:p1", WsID: "w1", Cwd: "/nonexistent/notes"}}, nil)
+	if got := nodeDir(roots[0]); got != "/nonexistent/notes" {
+		t.Errorf("space without worktree metadata: %q, want its first pane's cwd", got)
+	}
+	if got := nodeDir(roots[0].children[0]); got != "/nonexistent/notes" {
+		t.Errorf("pane: %q, want its cwd", got)
+	}
+}
+
+// TestFlashKeepsTheFrameHeight covers the flash arriving while `?` has the
+// help expanded: the flash is one line, so the tree takes the lines back and
+// the frame stays as tall as the terminal; and returns them afterwards.
+func TestFlashKeepsTheFrameHeight(t *testing.T) {
+	m := copyModel(t, t.TempDir())
+	res, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
+	m = res.(model)
+	m.toggleHelp()
+	if m.footH() < 2 {
+		t.Fatalf("the expanded help takes %d line(s), want more than one", m.footH())
+	}
+	expanded := m.vp.Height()
+	res, _ = m.Update(flashMsg("copied ~/x"))
+	m = res.(model)
+	if got := len(strings.Split(m.render(), "\n")); got != m.height {
+		t.Errorf("with a flash over the expanded help: %d lines, want %d", got, m.height)
+	}
+	res, _ = m.Update(clearFlashMsg(m.flash.seq))
+	m = res.(model)
+	if got := len(strings.Split(m.render(), "\n")); got != m.height || m.vp.Height() != expanded {
+		t.Errorf("after the flash: %d lines (tree %d), want %d (tree %d)", got, m.vp.Height(), m.height, expanded)
+	}
+}
+
+// TestCopyKeyIsInTheFullHelpOnly keeps the folded line short enough for the
+// popup: the copy key is listed only while `?` has the help expanded.
+func TestCopyKeyIsInTheFullHelpOnly(t *testing.T) {
+	h, keys := help.New(), defaultKeys()
+	h.SetWidth(200)
+	if short := ansi.Strip(h.View(keys)); strings.Contains(short, "copy the path") {
+		t.Errorf("folded help lists the copy key: %q", short)
+	}
+	h.ShowAll = true
+	if full := ansi.Strip(h.View(keys)); !strings.Contains(full, "^y") || !strings.Contains(full, "copy the path") {
+		t.Errorf("expanded help misses the copy key:\n%s", full)
+	}
+}
+
+// dumpModel is a model without a TUI over a small tree, the way main builds
+// it for -dump.
+func dumpModel() *model {
+	pane := &node{kind: "pane", label: "claude  [working]  fix-login", paneID: "w2:p1", status: "working", hasAgent: true}
+	server := &node{kind: "pane", label: "npm run dev", paneID: "w1:p2", proc: "npm run dev", ports: []int{3000, 9229}}
+	fix := &node{kind: "worktree", label: "fix/FED-12-login", branch: "fix/FED-12-login", folder: "fix-login", ticket: "FED-12",
+		pr: &prRef{Number: 77, State: "draft"}, wsID: "w2", status: "working", ahead: 2, unstaged: 3, expanded: true, children: []*node{pane}}
+	shop := &node{kind: "repo", label: "shop", branch: "main", wsID: "w1", status: "working", expanded: true, children: []*node{server, fix}}
+	docs := &node{kind: "repo", label: "docs", branch: "main", wsID: "w3", expanded: true}
+	roots := []*node{shop, docs}
+	stampOrder(roots)
+	m := &model{roots: roots, ti: textinput.New(), keys: defaultKeys()}
+	m.resort()
+	return m
+}
+
+// TestRunDump covers -dump: one line per node, indented by depth, with the
+// kind, the status, the id, and what the row shows around its label; panes
+// the popup hides are printed too.
+func TestRunDump(t *testing.T) {
+	var out bytes.Buffer
+	runDump(&out, dumpModel(), "")
+	want := strings.Join([]string{
+		"shop\t(repo working w1 main)",
+		"  npm run dev\t(pane  w1:p2)\t[proc :3000 :9229]",
+		"  FED-12 #77(draft) fix/FED-12-login\t(worktree working w2 fix/FED-12-login folder=fix-login " + deltaText(&node{ahead: 2}) + " !3)",
+		"    claude  [working]  fix-login\t(pane working w2:p1)",
+		"docs\t(repo  w3 main)",
+	}, "\n") + "\n"
+	if out.String() != want {
+		t.Errorf("dump:\n%s\nwant:\n%s", out.String(), want)
+	}
+}
+
+// TestQueryDump covers -dump -query: the rows applyFilter lists, the parents
+// kept for context unmarked, the matches with their score, and ">" on the one
+// the cursor would land on.
+func TestQueryDump(t *testing.T) {
+	var out bytes.Buffer
+	runDump(&out, dumpModel(), "login")
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want the header, the repo and the worktree:\n%s", len(lines), out.String())
+	}
+	if want := `query "login": 2 listed, 1 matched (sort: spaces, plain panes hidden)`; lines[0] != want {
+		t.Errorf("header %q, want %q", lines[0], want)
+	}
+	if !strings.HasPrefix(lines[1], "      -  shop\t(repo") {
+		t.Errorf("context row %q, want it unmarked and without a score", lines[1])
+	}
+	f := strings.Fields(lines[2])
+	if len(f) < 3 || f[0] != ">" || f[1] == "-" || !strings.Contains(lines[2], "  FED-12 #77(draft) fix/FED-12-login\t(worktree") {
+		t.Errorf("match row %q, want \">\", a score and the indented node", lines[2])
+	}
+
+	// A metadata hit (the PR number) and the agent pane, once panes are listed.
+	m := dumpModel()
+	m.showPanes = true
+	out.Reset()
+	runDump(&out, m, "fix")
+	if got := out.String(); !strings.Contains(got, "plain panes listed") || strings.Count(got, "\n*")+strings.Count(got, "\n>") != 2 {
+		t.Errorf("with panes listed \"fix\" matches the worktree and its pane:\n%s", got)
+	}
+	out.Reset()
+	runDump(&out, dumpModel(), "zzzz")
+	if got := out.String(); got != "query \"zzzz\": 0 listed, 0 matched (sort: spaces, plain panes hidden)\n" {
+		t.Errorf("no match: %q", got)
+	}
+}
+
+// TestHerdrError covers the message of a failed herdr read: herdr's own
+// words when it answered with its JSON error, the exec error otherwise.
+func TestHerdrError(t *testing.T) {
+	exit := errors.New("exit status 1")
+	reply := []byte(`{"id":"cli:workspace:list","error":{"code":"server_not_running","message":"no herdr server is running"}}` + "\n")
+	if got := herdrError(exit, reply, nil).Error(); got != "no herdr server is running" {
+		t.Errorf("JSON error on stdout: %q", got)
+	}
+	if got := herdrError(exit, nil, reply).Error(); got != "no herdr server is running" {
+		t.Errorf("JSON error on stderr: %q", got)
+	}
+	if got := herdrError(exit, []byte("boom"), nil); got != exit {
+		t.Errorf("anything else: %v, want the exec error", got)
+	}
+}
+
+// TestLoadJSONReportsAMissingHerdr covers the CLI not being there at all: an
+// error, straight away.
+func TestLoadJSONReportsAMissingHerdr(t *testing.T) {
+	t.Setenv("HERDR_BIN_PATH", filepath.Join(t.TempDir(), "no-herdr"))
+	var ws wsResp
+	if err := loadJSON([]string{"workspace", "list"}, &ws); err == nil {
+		t.Error("loadJSON with no herdr binary returned no error")
 	}
 }

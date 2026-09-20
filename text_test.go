@@ -37,3 +37,9 @@ func TestFirstLine(t *testing.T) {
 		}
 	}
 }
+
+func TestPlural(t *testing.T) {
+	if got := plural(1, "file") + ", " + plural(0, "file") + ", " + plural(12, "commit"); got != "1 file, 0 files, 12 commits" {
+		t.Errorf("plural = %q", got)
+	}
+}

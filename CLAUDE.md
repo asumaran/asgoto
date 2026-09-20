@@ -58,6 +58,11 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
 - `highlight.go` — `highlight`/`highlightFrom`, `matchOver`, `onSel`,
   `selPad` and the `stSel`/`stMatch` styles: how a match and the selected row
   look. The same file in every tool of the family.
+- `flash.go`: `flash`, `flashMsg`, `clearFlashMsg`: a confirmation that takes
+  the help line for a moment. The same file in every tool of the family.
+- `clipboard.go`: `copyCmd`: feeds a text to the system clipboard and reports
+  it with a `flashMsg`; `ASGOTO_CLIPBOARD` replaces the command. The same file
+  in every tool of the family.
 - `herdr-plugin.toml` — the herdr plugin manifest (id `asumaran.asgoto`): a
   `[[build]]` (runs `scripts/fetch-binary.sh` on install), the `picker` popup
   pane, and the `open` action that opens it (keybind entry point).
@@ -85,6 +90,7 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
 ```bash
 go build -o asgoto .     # local build in the repo
 ./asgoto -dump           # print the built tree (no TUI) for debugging without a TTY
+./asgoto -dump -query x  # the rows the filter lists for x, matches with scores
 ./asgoto -version        # print the embedded version
 go vet ./... && go test ./...
 scripts/pty-check.py ./asgoto   # end-to-end TUI check on a pty (python3 + pyte)
@@ -100,7 +106,9 @@ For end-to-end verification without a TTY, `scripts/pty-check.py ./asgoto`
 (python3 + `pyte`) spawns the binary on a pty, answers the terminal queries,
 replays keystrokes and asserts on pyte-rendered frames, in a throwaway sandbox
 (a herdr stub as `HERDR_BIN_PATH` serving a synthetic session and logging
-every call, no socket, a `gh` stub first on `PATH`). The v2 renderer repaints with scroll regions, which pyte ignores, so the
+every call, no socket, a `gh` stub first on `PATH`, a clipboard stub as
+`ASGOTO_CLIPBOARD` logging what `ctrl+y` feeds it). It also runs `-dump` and
+`-dump -query` without a pty against the same stubs. The v2 renderer repaints with scroll regions, which pyte ignores, so the
 driver forces a full redraw (pty resize + SIGWINCH) before reading a frame.
 
 ## How it's wired into herdr
@@ -187,6 +195,26 @@ Non-negotiables that are not obvious from the code:
   and resizing live in the expanded help only, so the folded line stays short
   enough for a narrow popup. A message (error, notice) takes the help's place
   on one line.
+- **Copying**: `ctrl+y` copies the directory of the row under the cursor
+  (`nodeDir`: the checkout of a repo or worktree, a pane's `cwd`, and the
+  first pane's `cwd` for a space that is no git checkout) with `copyCmd`
+  (`clipboard.go`). The clipboard gets the absolute path and the help line
+  flashes `copied <path with ~>` or `nothing to copy` (`flash.go`, shown by
+  `footMsg`, which has nothing else to show here); both files are the same in
+  every tool of the family. The flash is one line, so `fitBody` resizes the
+  tree when it comes and goes over an expanded help. The key is in the
+  expanded help only. `ASGOTO_CLIPBOARD` replaces the clipboard command,
+  which is how the tests and the pty check log it.
+- **`-dump` / `-query`**: flags are parsed with `flag` (`-version`, `-dump`,
+  `-query`). `-dump` runs the same `main()` path as the popup up to the model
+  (herdr reads, `buildTree`, sort, PR cache, process rows; ports and git
+  hints are fetched synchronously) and hands it to `runDump`, which prints
+  every node with `dumpLine`. `-dump -query x` goes through `queryDump`: it
+  sets the input, calls `applyFilter` and `selectBestMatch` on that model and
+  prints `m.rows`, so there is no second filter to keep in sync. It follows
+  the persisted `ctrl+a` / `ctrl+s` state. `loadJSON` bounds each herdr read
+  (`herdrTimeout`) and reports herdr's own JSON error message, so an
+  unreachable server is an error and exit 1, never a hang. Read-only.
 - **Filter matches** look the same in every tool of the family and come from
   one place, `highlight.go` (the same file in each repo; it also owns `stSel`
   and `stMatch`): a match is the match color plus an underline on top of the

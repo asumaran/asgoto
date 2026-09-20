@@ -5,8 +5,9 @@ Spawns the binary on a pty, answers the terminal queries bubbletea sends,
 replays keystrokes and asserts on frames rendered with pyte and on what was
 asked of herdr. Everything runs in a throwaway sandbox: a fake HOME, a herdr
 stub (HERDR_BIN_PATH) that serves a synthetic session and logs every call, no
-socket (HERDR_SOCKET_PATH unset) and a `gh` stub first on PATH. It never talks
-to a herdr server or to GitHub.
+socket (HERDR_SOCKET_PATH unset), a `gh` stub first on PATH and a clipboard
+stub (ASGOTO_CLIPBOARD) that logs what it is fed. It never talks to a herdr
+server, to GitHub or to the system clipboard.
 
 Usage: scripts/pty-check.py ./asgoto   (needs python3 + pyte)
 """
@@ -109,7 +110,7 @@ def done():
     print("\n%d failure(s)" % len(failures))
     sys.exit(1 if failures else 0)
 
-CTRL_A, CTRL_S, CTRL_T, ESC, ENTER, TAB, DOWN, UP = b"\x01", b"\x13", b"\x14", b"\x1b", b"\r", b"\t", b"\x1b[B", b"\x1b[A"
+CTRL_A, CTRL_S, CTRL_T, CTRL_Y, ESC, ENTER, TAB, DOWN, UP = b"\x01", b"\x13", b"\x14", b"\x19", b"\x1b", b"\r", b"\t", b"\x1b[B", b"\x1b[A"
 
 # ---------- sandbox: synthetic herdr session, herdr + gh stubs ----------
 def ws(wid, label, number, repo, path, linked=False, focused=False):
@@ -137,14 +138,26 @@ if [ -f "$f" ]; then cat "$f"; else printf '{}'; fi
 """ % (calls_log, data), 0o755)
 stub_bin = os.path.join(SANDBOX, "bin")
 write(os.path.join(stub_bin, "gh"), "#!/bin/sh\nprintf '[]'\n", 0o755)
+clip_log = os.path.join(SANDBOX, "clipboard.log")
+clipboard = write(os.path.join(SANDBOX, "clipboard"), '#!/bin/sh\ncat > "%s"\n' % clip_log, 0o755)
 
-def session():
+def sandbox_env():
     env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", HOME=home, HERDR_BIN_PATH=herdr,
+               ASGOTO_CLIPBOARD=clipboard,
                XDG_CONFIG_HOME=os.path.join(home, ".config"), PATH=stub_bin + os.pathsep + os.environ["PATH"])
     for k in ("HERDR_SOCKET_PATH", "HERDR_PLUGIN_STATE_DIR", "XDG_STATE_HOME", "HERDR_CONFIG_PATH"):
         env.pop(k, None)
+    return env
+
+def session():
     if os.path.exists(calls_log): os.remove(calls_log)
-    return Session(env)
+    return Session(sandbox_env())
+
+def run_plain(*args, **env):
+    """One run of the binary without a pty (the -dump side)."""
+    if os.path.exists(calls_log): os.remove(calls_log)
+    return subprocess.run([BIN, *args], env=dict(sandbox_env(), **env), cwd=SANDBOX, stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, timeout=20)
 
 def actions():
     time.sleep(0.3)
@@ -221,5 +234,42 @@ check(status(f) == "sort: priority", "ctrl+s switches to the priority order: %r"
 s.send(CTRL_S, 0.3)   # the choice is persisted; put it back
 os.write(s.master, ESC); s.pump(0.4)
 check(s.finish() == 0 and actions() == [], "esc quits without touching herdr: %r" % actions())
+
+# ---------- run 5: ctrl+y copies the path of the row under the cursor ----------
+s = session()
+s.start("asgoto ❯")
+f = s.send(CTRL_Y, 0.6); dump("copied", f)
+copied = open(clip_log).read() if os.path.exists(clip_log) else None
+check(copied == "/r/dotfiles", "ctrl+y feeds the clipboard the path of the space under the cursor: %r" % copied)
+check("copied /r/dotfiles" in f[-2], "the help line confirms the copy: %r" % f[-2])
+check(prompt(f) == "asgoto ❯ Search repos, worktrees and panes…", "ctrl+y is not typed into the filter: %r" % f[1])
+s.pump(2.2); f = s.send(b"?", 0.5)
+check(any(re.search(r"\^y\s+copy the path", l) for l in f), "the flash gives the help line back and ? lists the copy key: %r" % f[-5:-1])
+s.send(ESC, 0.4)   # folds the help
+os.write(s.master, ESC); s.pump(0.4)
+check(s.finish() == 0 and actions() == [], "copying never touches herdr: %r" % actions())
+
+# ---------- run 6: -dump prints the tree without a TUI, -query what the filter lists ----------
+p = run_plain("-dump")
+print("--- -dump ---\n" + p.stdout.rstrip())
+out = p.stdout.splitlines()
+check(p.returncode == 0 and b"\x1b" not in p.stdout.encode(), "-dump exits 0 and writes plain text, no TUI")
+check(len(out) == 5 and out[0].startswith("shop\t(repo working w1")
+      and out[1].startswith("  fix-checkout-form\t(worktree working w2")
+      and out[2].startswith("    claude") and "(pane working w2:p1)" in out[2]
+      and out[3].startswith("dotfiles\t(repo  w3") and "(pane  w3:p1)" in out[4],
+      "-dump lists the synthetic session, indented, panes included: %r" % out)
+check(actions() == [], "-dump only reads from herdr: %r" % actions())
+p = run_plain("-dump", "-query", "checkout")
+print("--- -dump -query checkout ---\n" + p.stdout.rstrip())
+out = p.stdout.splitlines()
+check(p.returncode == 0 and len(out) == 4 and re.match(r"^      -  shop\t", out[1])
+      and re.match(r"^> +\d+    fix-checkout-form\t", out[2]) and re.match(r"^\* +\d+      claude", out[3]),
+      "-query prints the rows the filter lists, the matches marked with their score: %r" % out)
+check(out[0] == 'query "checkout": 3 listed, 2 matched (sort: spaces, plain panes listed)',
+      "-query filters in the persisted mode (run 2 left ctrl+a on): %r" % out[0])
+p = run_plain("-dump", HERDR_BIN_PATH=os.path.join(SANDBOX, "no-herdr"))
+check(p.returncode == 1 and p.stdout == "" and "asgoto: herdr workspace list:" in p.stderr,
+      "-dump without herdr says so and exits 1: %r" % p.stderr)
 
 done()

@@ -11,9 +11,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -92,6 +95,7 @@ type node struct {
 	branch   string // git branch of the checkout ("" when detached/unknown); shown dim on repo rows, extra search text
 	folder   string // worktree only: checkout folder name (herdr's workspace label); shown dim when it no longer matches the branch, extra search text
 	checkout string // repo/worktree: path of the checkout, for the async ahead/behind lookup ("" when unknown)
+	cwd      string // pane: its working directory as herdr reports it; repo without worktree metadata: its first pane's ("" when unknown)
 	ahead    int    // commits ahead of the upstream (filled async by deltaMsg)
 	behind   int    // commits behind the upstream (filled async by deltaMsg)
 	staged   int    // staged files in the checkout (filled async by deltaMsg)
@@ -852,40 +856,43 @@ func countsText(n *node) string {
 	return strings.Join(parts, " ")
 }
 
+// herdrTimeout bounds one read from the herdr CLI: a server that does not
+// answer is an error to report, never a hang (the popup and -dump alike).
+const herdrTimeout = 5 * time.Second
+
 func loadJSON(args []string, out any) error {
-	data, err := exec.Command(herdrBin(), args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), herdrTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, herdrBin(), args...)
+	cmd.WaitDelay = time.Second
+	data, err := cmd.Output()
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return fmt.Errorf("no answer from herdr after %s", herdrTimeout)
+		}
+		var stderr []byte
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = ee.Stderr
+		}
+		return herdrError(err, data, stderr)
 	}
 	return json.Unmarshal(data, out)
 }
 
-// resolveGitDir returns the git dir of the checkout at path, handling both
-// main checkouts (.git dir) and linked worktrees (.git file with a "gitdir:"
-// pointer). Returns "" for non-repos. Reads the filesystem directly (no
-// subprocess; a `git` call per workspace would slow startup).
-func resolveGitDir(path string) string {
-	if path == "" {
-		return ""
+// herdrError is err said the way herdr said it: the CLI reports a failure as
+// a JSON error object (on either stream), whose message beats "exit status 1".
+func herdrError(err error, outputs ...[]byte) error {
+	for _, o := range outputs {
+		var resp struct {
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(bytes.TrimSpace(o), &resp) == nil && resp.Error != nil && resp.Error.Message != "" {
+			return fmt.Errorf("%s", resp.Error.Message)
+		}
 	}
-	gitdir := filepath.Join(path, ".git")
-	if fi, err := os.Stat(gitdir); err != nil {
-		return ""
-	} else if !fi.IsDir() {
-		data, err := os.ReadFile(gitdir)
-		if err != nil {
-			return ""
-		}
-		target := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
-		if target == "" {
-			return ""
-		}
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(path, target)
-		}
-		gitdir = target
-	}
-	return gitdir
+	return err
 }
 
 // gitTopLevel walks up from path to the nearest directory holding a .git
@@ -932,91 +939,6 @@ func worktreeCreatedAt(path string) time.Time {
 		return t
 	}
 	return fi.ModTime()
-}
-
-// ticketRe matches a Jira-style ticket key: a project key of 2+ letters, a
-// dash and digits (FED-2030, plat-1193). Letters-only before the dash keeps
-// slugs like "e2e" or "v1-2" from matching.
-var ticketRe = regexp.MustCompile(`(?i)\b([a-z][a-z]+-[0-9]+)\b`)
-
-// ticketFrom extracts a normalized (uppercase) ticket key from the first
-// source that contains one. Returns "" when none matches.
-func ticketFrom(sources ...string) string {
-	for _, s := range sources {
-		if m := ticketRe.FindString(s); m != "" {
-			return strings.ToUpper(m)
-		}
-	}
-	return ""
-}
-
-// githubSlug resolves "owner/repo" from the origin remote of the repo at
-// repoRoot, reading the git config file directly (startup-safe, no
-// subprocess). Returns "" when the origin is missing or not on github.com.
-func githubSlug(repoRoot string) string {
-	gitdir := resolveGitDir(repoRoot)
-	if gitdir == "" {
-		return ""
-	}
-	data, err := os.ReadFile(filepath.Join(gitdir, "config"))
-	if err != nil {
-		// A linked-worktree gitdir keeps config in the common dir.
-		common, cerr := os.ReadFile(filepath.Join(gitdir, "commondir"))
-		if cerr != nil {
-			return ""
-		}
-		target := strings.TrimSpace(string(common))
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(gitdir, target)
-		}
-		if data, err = os.ReadFile(filepath.Join(target, "config")); err != nil {
-			return ""
-		}
-	}
-	return githubSlugFromURL(originURL(string(data)))
-}
-
-// originURL scans git config content for the url of [remote "origin"].
-func originURL(config string) string {
-	inOrigin := false
-	for _, line := range strings.Split(config, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "[") {
-			inOrigin = line == `[remote "origin"]`
-			continue
-		}
-		if !inOrigin {
-			continue
-		}
-		if rest, ok := strings.CutPrefix(line, "url"); ok {
-			rest = strings.TrimSpace(rest)
-			if v, ok := strings.CutPrefix(rest, "="); ok {
-				return strings.TrimSpace(v)
-			}
-		}
-	}
-	return ""
-}
-
-// githubSlugFromURL extracts "owner/repo" from the ssh/https GitHub remote
-// URL forms. Non-GitHub hosts return "".
-func githubSlugFromURL(url string) string {
-	var rest string
-	switch {
-	case strings.HasPrefix(url, "git@github.com:"):
-		rest = strings.TrimPrefix(url, "git@github.com:")
-	case strings.HasPrefix(url, "ssh://git@github.com/"):
-		rest = strings.TrimPrefix(url, "ssh://git@github.com/")
-	case strings.HasPrefix(url, "https://github.com/"):
-		rest = strings.TrimPrefix(url, "https://github.com/")
-	default:
-		return ""
-	}
-	rest = strings.TrimSuffix(strings.TrimSuffix(rest, "/"), ".git")
-	if strings.Count(rest, "/") != 1 {
-		return ""
-	}
-	return rest
 }
 
 func paneLeaf(p paneInfo) string {
@@ -1128,7 +1050,7 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 			out = append(out, &node{
 				seq:  seq,
 				kind: "pane", label: leaf,
-				wsID: wsID, paneID: p.ID, status: paneStatus(p), hasAgent: p.Agent != "",
+				wsID: wsID, paneID: p.ID, cwd: p.Cwd, status: paneStatus(p), hasAgent: p.Agent != "",
 				expanded: true,
 			})
 		}
@@ -1217,6 +1139,7 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 			// still tells us which checkout this is.
 			checkout = gitTopLevel(ps[0].Cwd)
 			root = checkout
+			repo.cwd = ps[0].Cwd // what ctrl+y copies when this is no git checkout
 		}
 		if checkout != "" {
 			repo.checkout = checkout
@@ -1281,6 +1204,16 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 	return roots
 }
 
+// nodeDir is the directory a row stands for, what ctrl+y copies: the checkout
+// of a repo or worktree, the cwd of a pane (and of a space that is no git
+// checkout). "" when herdr reported none.
+func nodeDir(n *node) string {
+	if n.checkout != "" {
+		return n.checkout
+	}
+	return n.cwd
+}
+
 // currentWorkspaceNode is the repo/worktree row of the workspace asgoto was
 // opened from (herdr reports it as focused), so the cursor starts there and
 // the list opens scrolled to where you are. Nil when none is focused.
@@ -1336,14 +1269,15 @@ type keyMap struct {
 	Select key.Binding
 	Toggle key.Binding
 	Sort   key.Binding
+	Copy   key.Binding
 	Cancel key.Binding
 	Filter key.Binding
 	Help   key.Binding
 }
 
 // ShortHelp is the folded help line: the tool's own actions, the help and the
-// quit keys. The list's keys (listnav.go) are in the expanded help: at the
-// popup's 55% width the line would be cut before the quit keys.
+// quit keys. The list's keys (listnav.go) and the copy key are in the expanded
+// help: at the popup's 55% width the line would be cut before the quit keys.
 func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Filter, k.Select, k.Toggle, k.Sort, k.Help, k.Cancel}
 }
@@ -1354,7 +1288,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Filter},
 		{k.Nav.Up, k.Nav.PageUp, k.Nav.Top},
-		{k.Select, k.Toggle, k.Sort},
+		{k.Select, k.Toggle, k.Sort, k.Copy},
 		{k.Help, k.Cancel},
 	}
 }
@@ -1365,6 +1299,7 @@ func defaultKeys() keyMap {
 		Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		Toggle: key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("^a", "panes")),
 		Sort:   key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("^s", "sort")),
+		Copy:   key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("^y", "copy the path")),
 		Cancel: key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc/q", "quit")),
 		// Help-only entry: a binding without keys is disabled and the help
 		// bubble would skip it. Nothing ever matches against it.
@@ -1402,6 +1337,7 @@ type model struct {
 	vp            viewport.Model
 	help          help.Model
 	keys          keyMap
+	flash         flash    // confirmation on the help line (flash.go)
 	action        []string // herdr CLI args to run after quit (nil = no action)
 	focusPane     string   // pane to focus after quit via the socket API (pane.focus); "" = none
 }
@@ -2017,9 +1953,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.vp.SetWidth(m.innerW())
 		m.help.SetWidth(max(0, msg.Width-4))
-		m.vp.SetHeight(max(1, msg.Height-frameRows-m.footH())) // the frame's own lines + help
 		sizeInput(&m.ti, m.width-4)
-		m.renderContent()
+		m.fitBody()
+		return m, nil
+
+	case flashMsg:
+		cmd := m.flash.set(string(msg))
+		m.fitBody() // the flash is one line, the expanded help was more
+		return m, cmd
+
+	case clearFlashMsg:
+		m.flash.clear(msg)
+		m.fitBody()
 		return m, nil
 
 	case deltaMsg:
@@ -2137,6 +2082,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.keepCursorOn(cur)
 			m.renderContent()
 			return m, saveStateCmd(m.persisted())
+		case key.Matches(msg, m.keys.Copy):
+			path := ""
+			if m.cursor >= 0 && m.cursor < len(m.rows) {
+				path = nodeDir(m.rows[m.cursor].n)
+			}
+			return m, copyCmd("asgoto", homeRel(path), path)
 		case key.Matches(msg, m.keys.Sort):
 			var cur *node
 			if m.cursor >= 0 && m.cursor < len(m.rows) {
@@ -2189,45 +2140,6 @@ const (
 // innerW is the width inside the frame's sides.
 func (m model) innerW() int { return max(20, m.width-2) }
 
-// hline draws a horizontal border w cells wide between the corners l and r
-// (either may be empty), with optional (already styled) texts set into it
-// near each end.
-func hline(w int, l, r, left, right string) string {
-	inner := max(0, w-ansi.StringWidth(l)-ansi.StringWidth(r))
-	if left != "" {
-		left = " " + left + " "
-	}
-	if right != "" {
-		right = " " + right + " "
-	}
-	if 2+ansi.StringWidth(left)+ansi.StringWidth(right) > inner {
-		right = ""
-	}
-	if 1+ansi.StringWidth(left) > inner {
-		left = ansi.Truncate(left, max(0, inner-1), "")
-	}
-	fill := inner - ansi.StringWidth(left) - ansi.StringWidth(right)
-	lead := min(1, fill)
-	tail := 0
-	if right != "" {
-		tail = min(1, fill-lead)
-	}
-	return stDim.Render(l+strings.Repeat("─", lead)) + left +
-		stDim.Render(strings.Repeat("─", fill-lead-tail)) + right + stDim.Render(strings.Repeat("─", tail)+r)
-}
-
-// fit truncates or pads s to exactly w cells.
-func fit(s string, w int) string {
-	s = ansi.Truncate(s, w, "")
-	return s + strings.Repeat(" ", max(0, w-ansi.StringWidth(s)))
-}
-
-// framed sets a line, with a cell of padding, between the frame's sides.
-func framed(w int, l string) string {
-	side := stDim.Render("│")
-	return side + fit(" "+l, w-2) + side
-}
-
 // render stacks the four sections in one frame; the tests assert on it.
 func (m model) render() string {
 	w, side := m.width, stDim.Render("│")
@@ -2245,24 +2157,48 @@ func (m model) render() string {
 		out = append(out, side+fit(l, m.innerW())+side)
 	}
 	out = append(out, hline(w, "├", "┤", "", m.counter()))
-	for _, l := range helpLines(m.help, m.keys, w-4, m.footH()) {
+	for _, l := range m.footLines() {
 		out = append(out, framed(w, l))
 	}
 	return strings.Join(append(out, hline(w, "╰", "╯", "", "")), "\n")
 }
 
-// footH is the height of the help, which takes more lines while `?` has it
-// expanded; the tree keeps at least minBodyH.
+// footMsg is what takes the help's place while there is something to say.
+// asgoto has no error or notice of its own, so that is only the flash.
+func (m model) footMsg() string {
+	if m.flash.text != "" {
+		return m.flash.view(m.width - 4)
+	}
+	return ""
+}
+
+func (m model) footLines() []string {
+	if msg := m.footMsg(); msg != "" {
+		return []string{msg}
+	}
+	return helpLines(m.help, m.keys, m.width-4, m.footH())
+}
+
+// footH is the height of the foot: a message takes one line, the help more
+// while `?` has it expanded; the tree keeps at least minBodyH.
 func (m *model) footH() int {
+	if m.footMsg() != "" {
+		return 1
+	}
 	return helpHeight(m.help, m.keys, m.height-frameRows-minBodyH)
 }
 
 const minBodyH = 4
 
-func (m *model) toggleHelp() {
-	m.help.ShowAll = !m.help.ShowAll
+// fitBody gives the tree the lines the frame and the foot leave.
+func (m *model) fitBody() {
 	m.vp.SetHeight(max(1, m.height-frameRows-m.footH()))
 	m.renderContent()
+}
+
+func (m *model) toggleHelp() {
+	m.help.ShowAll = !m.help.ShowAll
+	m.fitBody()
 }
 
 // counter is the rows listed out of every row of the current mode, for the
@@ -2293,20 +2229,29 @@ func (m model) status() string {
 var version = "dev"
 
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+	showVersion := flag.Bool("version", false, "print the embedded version")
+	dumpFlag := flag.Bool("dump", false, "print the tree (no TUI)")
+	query := flag.String("query", "", "with -dump: print the rows the filter lists for this text, and their scores")
+	flag.Usage = func() {
+		fmt.Fprintln(flag.CommandLine.Output(), "usage: asgoto [flags]")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if *showVersion {
 		fmt.Println(version)
 		return
 	}
-	dump := len(os.Args) > 1 && os.Args[1] == "-dump"
+	dump := *dumpFlag
 
 	var ws wsResp
 	var pn paneResp
 	if err := loadJSON([]string{"workspace", "list"}, &ws); err != nil {
-		fmt.Fprintln(os.Stderr, "workspace list:", err)
+		fmt.Fprintln(os.Stderr, "asgoto: herdr workspace list:", err)
 		os.Exit(1)
 	}
 	if err := loadJSON([]string{"pane", "list"}, &pn); err != nil {
-		fmt.Fprintln(os.Stderr, "pane list:", err)
+		fmt.Fprintln(os.Stderr, "asgoto: herdr pane list:", err)
 		os.Exit(1)
 	}
 	// Only feeds the priority order's tiebreaker, so a failure (older herdr)
@@ -2392,48 +2337,6 @@ func main() {
 		layoutHints(allNodes)
 	}
 
-	if dump {
-		var walk func(n *node, d int)
-		walk = func(n *node, d int) {
-			prefix := ""
-			if n.ticket != "" {
-				prefix += n.ticket + " "
-			}
-			if n.pr != nil {
-				prefix += fmt.Sprintf("#%d(%s) ", n.pr.Number, n.pr.State)
-			}
-			id := n.wsID
-			if n.kind == "pane" {
-				id = n.paneID
-			}
-			branch := ""
-			if n.branch != "" {
-				branch = " " + n.branch
-			}
-			if n.folder != "" && n.folder != n.label {
-				branch += " folder=" + n.folder
-			}
-			if d := deltaText(n); d != "" {
-				branch += " " + d
-			}
-			if c := countsText(n); c != "" {
-				branch += " " + c
-			}
-			proc := ""
-			if n.proc != "" {
-				proc = "\t[proc " + portsText(n) + "]"
-			}
-			fmt.Printf("%s%s%s\t(%s %s %s%s)%s\n", strings.Repeat("  ", d), prefix, n.label, n.kind, n.status, id, branch, proc)
-			for _, c := range n.children {
-				walk(c, d+1)
-			}
-		}
-		for _, r := range roots {
-			walk(r, 0)
-		}
-		return
-	}
-
 	ti := newFilterInput("asgoto", "Search repos, worktrees and panes…")
 
 	m := model{
@@ -2455,6 +2358,10 @@ func main() {
 		keys:          defaultKeys(),
 	}
 	m.resort()
+	if dump {
+		runDump(os.Stdout, &m, *query)
+		return
+	}
 	m.applyFilter()
 	m.keepCursorOn(currentWorkspaceNode(ws.Result.Workspaces, allNodes))
 	m.renderContent()
@@ -2476,6 +2383,94 @@ func main() {
 	if final.action != nil {
 		exec.Command(herdrBin(), final.action...).Run()
 	}
+}
+
+// runDump prints the tree the popup is built from, without a TTY: every node,
+// the panes the popup hides included. With a query it prints instead the rows
+// the filter lists for it, in the popup's current mode (see queryDump).
+func runDump(w io.Writer, m *model, query string) {
+	if query != "" {
+		queryDump(w, m, query)
+		return
+	}
+	var walk func(n *node, depth int)
+	walk = func(n *node, depth int) {
+		fmt.Fprintln(w, dumpLine(n, depth))
+		for _, c := range n.children {
+			walk(c, depth+1)
+		}
+	}
+	for _, r := range m.roots {
+		walk(r, 0)
+	}
+}
+
+// queryDump runs the popup's own filter (applyFilter, then the cursor rule of
+// selectBestMatch) and prints the rows it lists: ">" marks the match the
+// cursor lands on, "*" the other matches, each with its score; the rows
+// without a mark are the parents kept for context. Whether plain panes are
+// listed follows the persisted ctrl+a state, as in the popup.
+func queryDump(w io.Writer, m *model, query string) {
+	m.ti.SetValue(query)
+	m.applyFilter()
+	m.selectBestMatch()
+	matches := 0
+	for _, r := range m.rows {
+		if r.match {
+			matches++
+		}
+	}
+	panes := "plain panes hidden"
+	if m.showPanes {
+		panes = "plain panes listed"
+	}
+	fmt.Fprintf(w, "query %q: %d listed, %d matched (%s, %s)\n", query, len(m.rows), matches, ansi.Strip(sortLabel(m.prioritySort)), panes)
+	for i, r := range m.rows {
+		mark, score := " ", "-"
+		if r.match {
+			mark, score = "*", strconv.Itoa(r.score)
+			if i == m.cursor {
+				mark = ">"
+			}
+		}
+		fmt.Fprintf(w, "%s %5s  %s\n", mark, score, dumpLine(r.n, r.depth))
+	}
+}
+
+// dumpLine is one node as text: what the row shows to the left of its label
+// (ticket, PR), the label, then in parentheses the kind, the aggregated
+// status, the id `enter` focuses and what the right column shows (branch,
+// stale folder, ahead/behind, counters); process rows end with their ports.
+func dumpLine(n *node, depth int) string {
+	prefix := ""
+	if n.ticket != "" {
+		prefix += n.ticket + " "
+	}
+	if n.pr != nil {
+		prefix += fmt.Sprintf("#%d(%s) ", n.pr.Number, n.pr.State)
+	}
+	id := n.wsID
+	if n.kind == "pane" {
+		id = n.paneID
+	}
+	extra := ""
+	if n.branch != "" {
+		extra = " " + n.branch
+	}
+	if n.folder != "" && n.folder != n.label {
+		extra += " folder=" + n.folder
+	}
+	if d := deltaText(n); d != "" {
+		extra += " " + d
+	}
+	if c := countsText(n); c != "" {
+		extra += " " + c
+	}
+	proc := ""
+	if n.proc != "" {
+		proc = "\t[proc " + portsText(n) + "]"
+	}
+	return fmt.Sprintf("%s%s%s\t(%s %s %s%s)%s", strings.Repeat("  ", depth), prefix, n.label, n.kind, n.status, id, extra, proc)
 }
 
 // focusPane focuses an arbitrary pane (shell, process or agent) through

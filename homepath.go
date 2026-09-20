@@ -23,11 +23,11 @@ func tildePath(p, home string) string {
 	return p
 }
 
-// homeRel is tildePath against the current user's home.
-func homeRel(p string) string {
-	h, err := os.UserHomeDir()
-	if err != nil {
-		return p
-	}
-	return tildePath(p, h)
+// homeDir is the current user's home, "" when it cannot be told.
+func homeDir() string {
+	h, _ := os.UserHomeDir()
+	return h
 }
+
+// homeRel is tildePath against the current user's home.
+func homeRel(p string) string { return tildePath(p, homeDir()) }
