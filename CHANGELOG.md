@@ -1,3 +1,7 @@
+## v0.17.2 (2026-09-19)
+
+* fix: shorten only paths inside the home dir (c8f099c)
+
 ## v0.17.1 (2026-09-19)
 
 * refactor: share the last duplicated helpers (f91b6fa)
