@@ -98,3 +98,17 @@ func scrollTo(offset, height, count, cursor, top int) int {
 	}
 	return max(0, min(offset, count-height))
 }
+
+// emptyList is what a list says instead of rows, cut to width: the error
+// that kept it from loading, that the query matches nothing, or the tool's
+// own reason (nothing to list, still loading).
+func emptyList(err, query, reason string, width int) string {
+	msg := reason
+	switch {
+	case err != "":
+		msg = err
+	case query != "":
+		msg = "No matches"
+	}
+	return stDim.Render(truncate(" "+msg, width))
+}

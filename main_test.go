@@ -980,3 +980,18 @@ func TestStateIsOneFilePerSetting(t *testing.T) {
 		t.Errorf("files = %q %q", loadSetting(dir, "panes"), loadSetting(dir, "order"))
 	}
 }
+
+// TestEmptyTreeSaysWhy: a query that matches nothing says so in the list, as
+// in every tool of the family (emptyList in listnav.go).
+func TestEmptyTreeSaysWhy(t *testing.T) {
+	m := copyModel(t, t.TempDir())
+	m.ti = newFilterInput("asgoto", "Search…")
+	for _, r := range "zzzzqq" {
+		res, _ := m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = res.(model)
+	}
+	plain := strings.Split(ansi.Strip(m.render()), "\n")
+	if len(m.rows) != 0 || !strings.HasPrefix(plain[3], "│ No matches") || len(plain) != m.height {
+		t.Errorf("rows=%d, first list line %q, %d lines", len(m.rows), plain[3], len(plain))
+	}
+}

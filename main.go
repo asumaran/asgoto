@@ -2135,6 +2135,10 @@ func (m model) render() string {
 		hline(w, "├", "┤", "", ""),
 	}
 	lines := strings.Split(m.vp.View(), "\n")
+	if len(m.rows) == 0 {
+		// Nothing to list: say why, as every tool of the family does.
+		lines = []string{emptyList("", m.ti.Value(), "No spaces", m.innerW())}
+	}
 	for i := 0; i < m.vp.Height(); i++ {
 		l := ""
 		if i < len(lines) {

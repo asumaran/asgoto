@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestListNavMoves(t *testing.T) {
@@ -83,5 +84,20 @@ func TestScrollTo(t *testing.T) {
 		if got := scrollTo(c.offset, c.height, c.count, c.cursor, c.top); got != c.want {
 			t.Errorf("%s: scrollTo = %d, want %d", c.name, got, c.want)
 		}
+	}
+}
+
+func TestEmptyList(t *testing.T) {
+	for _, c := range []struct{ err, query, reason, want string }{
+		{"", "", "No open PRs", " No open PRs"},
+		{"", "fix", "No open PRs", " No matches"},
+		{"index: no such file", "fix", "No notes", " index: no such file"},
+	} {
+		if got := ansi.Strip(emptyList(c.err, c.query, c.reason, 40)); got != c.want {
+			t.Errorf("emptyList(%q, %q, %q) = %q, want %q", c.err, c.query, c.reason, got, c.want)
+		}
+	}
+	if got := ansi.Strip(emptyList("", "", "No sessions in ~/a/very/long/directory", 12)); ansi.StringWidth(got) > 12 {
+		t.Errorf("%q is wider than 12", got)
 	}
 }
