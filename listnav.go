@@ -80,3 +80,21 @@ func (n listNav) move(msg tea.KeyPressMsg, cursor, count, page int, selectable f
 	}
 	return cursor
 }
+
+// scrollTo is the offset of a list that keeps the cursor in view, moving as
+// little as it can: height rows of count show from the offset on. top is the
+// first row to show with the cursor when scrolling up, the cursor itself or
+// the header of its group right above it, so a group's name never hides one
+// line over the selection. An empty list, or none to show, scrolls to 0.
+func scrollTo(offset, height, count, cursor, top int) int {
+	if height <= 0 || cursor < 0 || count <= 0 {
+		return 0
+	}
+	switch {
+	case top < offset:
+		offset = top
+	case cursor >= offset+height:
+		offset = cursor - height + 1
+	}
+	return max(0, min(offset, count-height))
+}

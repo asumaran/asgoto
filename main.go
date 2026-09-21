@@ -1940,15 +1940,7 @@ func (m *model) renderContent() {
 }
 
 func (m *model) ensureVisible() {
-	h := m.vp.Height()
-	if h <= 0 {
-		return
-	}
-	if m.cursor < m.vp.YOffset() {
-		m.vp.SetYOffset(m.cursor)
-	} else if m.cursor >= m.vp.YOffset()+h {
-		m.vp.SetYOffset(m.cursor - h + 1)
-	}
+	m.vp.SetYOffset(scrollTo(m.vp.YOffset(), m.vp.Height(), len(m.rows), m.cursor, m.cursor))
 }
 
 func (m model) Init() tea.Cmd {

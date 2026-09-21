@@ -63,3 +63,25 @@ func TestListNavSkipsRowsTheCursorMayNotSitOn(t *testing.T) {
 		t.Errorf("a page that lands on a header carries on: %d, want 3", got)
 	}
 }
+
+func TestScrollTo(t *testing.T) {
+	for _, c := range []struct {
+		name                               string
+		offset, height, count, cursor, top int
+		want                               int
+	}{
+		{"in view stays put", 5, 10, 40, 8, 8, 5},
+		{"above the window scrolls up to it", 5, 10, 40, 3, 3, 3},
+		{"its header comes along", 5, 10, 40, 5, 4, 4},
+		{"below the window scrolls down just enough", 5, 10, 40, 20, 20, 11},
+		{"never past the end", 35, 10, 40, 39, 39, 30},
+		{"a short list does not scroll", 3, 10, 4, 3, 3, 0},
+		{"no cursor", 5, 10, 40, -1, -1, 0},
+		{"no list", 5, 10, 0, 0, 0, 0},
+		{"no room", 5, 0, 40, 8, 8, 0},
+	} {
+		if got := scrollTo(c.offset, c.height, c.count, c.cursor, c.top); got != c.want {
+			t.Errorf("%s: scrollTo = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
