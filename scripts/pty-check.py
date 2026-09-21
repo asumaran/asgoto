@@ -199,7 +199,7 @@ f = s.send(b"checkout", 0.6); dump("filtered", f)
 r = rows(f)
 check(len(r) == 2 and "shop" in r[0] and "▌" in r[1] and "fix-checkout-form" in r[1],
       "the filter keeps the ancestor and lands on the match: %r" % r)
-check(counter(f).startswith("2/3"), "the counter follows the filter: %r" % counter(f))
+check(counter(f).startswith("1/3"), "the counter counts the match, not the ancestor kept for context: %r" % counter(f))
 s.send(ENTER, 0.3)
 check(s.finish() == 0, "clean exit after enter")
 check(actions() == ["workspace focus w2"], "enter focuses the workspace: %r" % actions())

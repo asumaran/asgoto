@@ -49,7 +49,7 @@ func TestLayoutPrefixesAndPlainPrefix(t *testing.T) {
 func TestSearchByTicketAndPRNumber(t *testing.T) {
 	byPR := &node{kind: "worktree", label: "webvitals-faro", pr: &prRef{Number: 6449, State: "open"}}
 	byTicket := &node{kind: "worktree", label: "stg-validation", ticket: "FED-2035"}
-	repo := &node{kind: "repo", label: "monorepo-front", expanded: true, children: []*node{byPR, byTicket}}
+	repo := &node{kind: "repo", label: "monorepo-front", children: []*node{byPR, byTicket}}
 	roots := []*node{repo}
 
 	m := model{roots: roots, ti: textinput.New()}
@@ -82,7 +82,7 @@ func TestSearchByTicketAndPRNumber(t *testing.T) {
 func TestSearchByWorktreeFolder(t *testing.T) {
 	moved := &node{kind: "worktree", label: "as-foo-bar-test", branch: "as-foo-bar-test", folder: "foo"}
 	other := &node{kind: "worktree", label: "feat/x", branch: "feat/x", folder: "feat-x"}
-	repo := &node{kind: "repo", label: "monorepo-front", branch: "master", expanded: true, children: []*node{moved, other}}
+	repo := &node{kind: "repo", label: "monorepo-front", branch: "master", children: []*node{moved, other}}
 	roots := []*node{repo}
 
 	m := model{roots: roots, ti: textinput.New()}
@@ -520,8 +520,8 @@ func TestResortKeepsCorporaParallel(t *testing.T) {
 func TestQueryTermsFollowTheTree(t *testing.T) {
 	fix := &node{kind: "worktree", label: "fix-login"}
 	docs := &node{kind: "worktree", label: "docs"}
-	herdr := &node{kind: "repo", label: "herdr", children: []*node{fix, docs}, expanded: true}
-	other := &node{kind: "repo", label: "shop", children: []*node{{kind: "worktree", label: "fix-cart"}}, expanded: true}
+	herdr := &node{kind: "repo", label: "herdr", children: []*node{fix, docs}}
+	other := &node{kind: "repo", label: "shop", children: []*node{{kind: "worktree", label: "fix-cart"}}}
 	roots := []*node{herdr, other}
 	stampOrder(roots)
 	m := model{roots: roots, ti: textinput.New(), keys: defaultKeys()}
@@ -541,6 +541,10 @@ func TestQueryTermsFollowTheTree(t *testing.T) {
 		}
 		if len(m.rows) != 2 || m.rows[0].n != herdr || m.rows[1].n != fix {
 			t.Errorf("%q: rows must be herdr and its fix-login worktree", q)
+		}
+		// the counter counts the match, not the parent kept for context
+		if got := ansi.Strip(m.counter()); got != "1/5" {
+			t.Errorf("%q: counter %q, want 1/5", q, got)
 		}
 	}
 	m.ti.SetValue("'")
@@ -674,9 +678,9 @@ func TestStatusDotStyles(t *testing.T) {
 func copyModel(t *testing.T, home string) model {
 	t.Helper()
 	pane := &node{kind: "pane", label: "claude", paneID: "w2:p1", cwd: filepath.Join(home, "wt/shop/fix/src"), hasAgent: true}
-	fix := &node{kind: "worktree", label: "fix", wsID: "w2", checkout: filepath.Join(home, "wt/shop/fix"), expanded: true, children: []*node{pane}}
-	shop := &node{kind: "repo", label: "shop", wsID: "w1", checkout: filepath.Join(home, "Developer/shop"), expanded: true, children: []*node{fix}}
-	bare := &node{kind: "repo", label: "scratch", wsID: "w3", expanded: true}
+	fix := &node{kind: "worktree", label: "fix", wsID: "w2", checkout: filepath.Join(home, "wt/shop/fix"), children: []*node{pane}}
+	shop := &node{kind: "repo", label: "shop", wsID: "w1", checkout: filepath.Join(home, "Developer/shop"), children: []*node{fix}}
+	bare := &node{kind: "repo", label: "scratch", wsID: "w3"}
 	roots := []*node{shop, bare}
 	stampOrder(roots)
 	m := model{roots: roots, showPanes: true, ti: textinput.New(), vp: viewport.New(viewport.WithWidth(98), viewport.WithHeight(7)),
@@ -867,9 +871,9 @@ func dumpModel() *model {
 	pane := &node{kind: "pane", label: "claude  [working]  fix-login", paneID: "w2:p1", status: "working", hasAgent: true}
 	server := &node{kind: "pane", label: "npm run dev", paneID: "w1:p2", proc: "npm run dev", ports: []int{3000, 9229}}
 	fix := &node{kind: "worktree", label: "fix/FED-12-login", branch: "fix/FED-12-login", folder: "fix-login", ticket: "FED-12",
-		pr: &prRef{Number: 77, State: "draft"}, wsID: "w2", status: "working", ahead: 2, unstaged: 3, expanded: true, children: []*node{pane}}
-	shop := &node{kind: "repo", label: "shop", branch: "main", wsID: "w1", status: "working", expanded: true, children: []*node{server, fix}}
-	docs := &node{kind: "repo", label: "docs", branch: "main", wsID: "w3", expanded: true}
+		pr: &prRef{Number: 77, State: "draft"}, wsID: "w2", status: "working", ahead: 2, unstaged: 3, children: []*node{pane}}
+	shop := &node{kind: "repo", label: "shop", branch: "main", wsID: "w1", status: "working", children: []*node{server, fix}}
+	docs := &node{kind: "repo", label: "docs", branch: "main", wsID: "w3"}
 	roots := []*node{shop, docs}
 	stampOrder(roots)
 	m := &model{roots: roots, ti: textinput.New(), keys: defaultKeys()}

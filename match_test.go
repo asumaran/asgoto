@@ -99,13 +99,13 @@ func TestFindFieldsTermsInAnyOrderAcrossFields(t *testing.T) {
 		if len(hits) != 1 {
 			t.Fatalf("%q: hits %v, want only item 0", q, hits)
 		}
-		if h := hits[0]; !reflect.DeepEqual(h.Idx[0], []int{0, 1, 2, 4, 5, 6, 7, 8}) {
-			t.Errorf("%q: title offsets %v, want both words", q, h.Idx[0])
+		if h := hits[0]; !reflect.DeepEqual(h.Any[0], []int{0, 1, 2, 4, 5, 6, 7, 8}) {
+			t.Errorf("%q: title offsets %v, want both words", q, h.Any[0])
 		}
 	}
 	// a term may match one field and the next another
 	hits := findFields("readme docs", titles, branches)
-	if h, ok := hits[1]; len(hits) != 1 || !ok || len(h.Idx[0]) != 6 || len(h.Idx[1]) != 4 {
+	if h, ok := hits[1]; len(hits) != 1 || !ok || len(h.Any[0]) != 6 || len(h.Any[1]) != 10 {
 		t.Errorf("terms across fields: %+v", hits)
 	}
 	one, two := findFields("login", titles, branches)[0], findFields("login fix", titles, branches)[0]
@@ -138,5 +138,17 @@ func TestHasTerms(t *testing.T) {
 		if got := hasTerms(q); got != want {
 			t.Errorf("hasTerms(%q) = %v, want %v", q, got, want)
 		}
+	}
+}
+
+// A term lights up in every field it is in, not only in the one that scored
+// best: the visible column shows why the row is listed.
+func TestFindFieldsReportsEveryFieldATermIsIn(t *testing.T) {
+	h, ok := findFields("login", []string{"rework the login page"}, []string{"login"})[0]
+	if !ok || h.Field != 1 {
+		t.Fatalf("the branch is the best field: %+v", h)
+	}
+	if !reflect.DeepEqual(h.Any[0], []int{11, 12, 13, 14, 15}) {
+		t.Errorf("title offsets %v, want the word login", h.Any[0])
 	}
 }

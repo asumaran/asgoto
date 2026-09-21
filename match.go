@@ -60,13 +60,14 @@ func queryTerms(q string, fuzzyByDefault bool) []qterm {
 }
 
 // fieldsHit is what a query found in one item. Field is the field the
-// best-scoring term matched in. Idx holds, per field, the byte offsets matched
-// by the terms that did best in that field; Any holds the offsets of every
-// term that matched there at all, best field or not. Both are sorted.
+// best-scoring term matched in. Any holds, per field, the sorted byte offsets
+// of every term that matched there, whether or not that field was the term's
+// best one. It is what a tool highlights: a term that is in the visible
+// column lights up there even when a hidden field scored higher, so a listed
+// row always shows why it is listed when the visible text can show it.
 type fieldsHit struct {
 	Score int
 	Field int
-	Idx   [][]int
 	Any   [][]int
 }
 
@@ -81,7 +82,7 @@ func findFields(q string, fields ...[]string) map[int]fieldsHit {
 		return hits
 	}
 	blank := func() fieldsHit {
-		return fieldsHit{Idx: make([][]int, len(fields)), Any: make([][]int, len(fields))}
+		return fieldsHit{Any: make([][]int, len(fields))}
 	}
 	terms := queryTerms(q, true)
 	if len(terms) == 0 {
@@ -122,7 +123,6 @@ func findFields(q string, fields ...[]string) map[int]fieldsHit {
 			if top[i] < b.score || n == 0 {
 				top[i], h.Field = b.score, b.field
 			}
-			h.Idx[b.field] = mergeIdx(h.Idx[b.field], got.Any[b.field])
 			for f := range fields {
 				h.Any[f] = mergeIdx(h.Any[f], got.Any[f])
 			}

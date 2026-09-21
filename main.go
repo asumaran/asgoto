@@ -119,7 +119,6 @@ type node struct {
 	proc     string // pane only: foreground command running in it; such panes are always listed, labelled by the command
 	pids     []int  // pane only: pids of the foreground process group, for the ports lookup
 	ports    []int  // pane only: TCP ports its process tree listens on; right-aligned
-	expanded bool
 	children []*node
 }
 
@@ -1060,7 +1059,6 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 				seq:  seq,
 				kind: "pane", label: leaf,
 				wsID: wsID, paneID: p.ID, cwd: p.Cwd, status: paneStatus(p), hasAgent: p.Agent != "",
-				expanded: true,
 			})
 		}
 		return out
@@ -1138,7 +1136,7 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 			main = g.wss[0]
 		}
 		name := repoName(main)
-		repo := &node{kind: "repo", label: name, wsID: main.ID, expanded: true}
+		repo := &node{kind: "repo", label: name, wsID: main.ID}
 		checkout, root := "", ""
 		if main.Worktree != nil {
 			checkout, root = main.Worktree.CheckoutPath, main.Worktree.RepoRoot
@@ -1191,7 +1189,7 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 			// the folder is just the slug of whatever branch it was created
 			// for, and a later checkout leaves it stale (herdr's sidebar
 			// shows the same branch under the folder label).
-			wt := &node{kind: "worktree", label: ws.Label, folder: ws.Label, wsID: ws.ID, expanded: true}
+			wt := &node{kind: "worktree", label: ws.Label, folder: ws.Label, wsID: ws.ID}
 			if ws.Worktree != nil {
 				wt.checkout = ws.Worktree.CheckoutPath
 				wt.branch = gitBranch(ws.Worktree.CheckoutPath)
@@ -1670,7 +1668,7 @@ func (m *model) applyFilter() {
 				if fh, ok := found[index[n]]; ok {
 					own, covered[t] = true, true
 					h.score += fh.Score
-					h.idx = mergeIdx(h.idx, fh.Idx[0])
+					h.idx = mergeIdx(h.idx, fh.Any[0])
 				}
 				all = all && covered[t]
 			}
@@ -1714,11 +1712,9 @@ func (m *model) applyFilter() {
 	walk = func(n *node, depth int) {
 		h, ok := hits[n]
 		m.rows = append(m.rows, rowItem{n: n, depth: depth, match: ok, score: h.score, idx: h.idx})
-		if n.expanded || filtering {
-			for _, c := range n.children {
-				if subtree(c) {
-					walk(c, depth+1)
-				}
+		for _, c := range n.children {
+			if subtree(c) {
+				walk(c, depth+1)
 			}
 		}
 	}
@@ -2208,9 +2204,19 @@ func (m *model) fitBody() {
 	m.renderContent()
 }
 
-// counter is the rows listed out of every row of the current mode, for the
-// edge under the list.
+// counter is, for the edge under the list, the rows listed out of every row
+// of the current mode. With a query it counts the matches, as the rest of the
+// family and -dump -query do: the parents kept for context are not results.
 func (m model) counter() string {
+	shown := 0
+	for _, r := range m.rows {
+		if r.match {
+			shown++
+		}
+	}
+	if shown == 0 {
+		shown = len(m.rows) // no query: nothing is a match, every row counts
+	}
 	total := 0
 	for _, n := range m.allNodes {
 		// Same rule as applyFilter: process rows are always listed, plain
@@ -2219,7 +2225,7 @@ func (m model) counter() string {
 			total++
 		}
 	}
-	return stCount.Render(strconv.Itoa(len(m.rows)) + "/" + strconv.Itoa(total))
+	return stCount.Render(strconv.Itoa(shown) + "/" + strconv.Itoa(total))
 }
 
 // status is the active order, for the edge over the input; it is dropped on a
@@ -2374,20 +2380,32 @@ func main() {
 	// The alt screen is declared per frame by View().
 	res, err := tea.NewProgram(m).Run()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "asgoto:", err)
 		os.Exit(1)
 	}
 	final := res.(model)
-	if final.focusPane != "" {
-		if err := focusPane(final.focusPane); err != nil {
-			// Standalone run (no socket env) or an older server: the CLI's
-			// agent focus still lands on agent panes.
-			exec.Command(herdrBin(), "agent", "focus", final.focusPane).Run()
+	if err := runAction(final.focusPane, final.action); err != nil {
+		fmt.Fprintln(os.Stderr, "asgoto:", err)
+		os.Exit(1)
+	}
+}
+
+// runAction does what enter chose, once the TUI is gone: quitting is what
+// closes the popup, and the focus has to move after that.
+func runAction(pane string, action []string) error {
+	if pane != "" && focusPane(pane) != nil {
+		// Standalone run (no socket env) or an older server: the CLI's
+		// agent focus still lands on agent panes.
+		if err := exec.Command(herdrBin(), "agent", "focus", pane).Run(); err != nil {
+			return fmt.Errorf("focus pane %s: %w", pane, err)
 		}
 	}
-	if final.action != nil {
-		exec.Command(herdrBin(), final.action...).Run()
+	if action != nil {
+		if err := exec.Command(herdrBin(), action...).Run(); err != nil {
+			return fmt.Errorf("herdr %s: %w", strings.Join(action, " "), err)
+		}
 	}
+	return nil
 }
 
 // runDump prints the tree the popup is built from, without a TTY: every node,
