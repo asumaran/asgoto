@@ -9,8 +9,8 @@
 # fails. Exits non-zero only when neither path works, which aborts the plugin
 # install.
 #
-# Set ASGOTO_BUILD_FROM_SOURCE=1 to skip the download and always compile locally
-# (for users who prefer not to run prebuilt binaries):
+# Set ASGOTO_BUILD_FROM_SOURCE=1 to skip the download and always compile
+# locally (for users who prefer not to run prebuilt binaries):
 #   ASGOTO_BUILD_FROM_SOURCE=1 herdr plugin install asumaran/asgoto
 set -eu
 

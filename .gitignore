@@ -1,13 +1,12 @@
 # Compiled binary (built locally or in CI; attached to GitHub Releases as an asset).
 /asgoto
-/asgoto
 asgoto-darwin-*
 asgoto-linux-*
 
 # Release staging
 /dist/
 
-# Runtime state (lives in the herdr config dir, never in the repo).
+# Runtime state (lives in the herdr state dir, never in the repo).
 state.json
 
 # macOS

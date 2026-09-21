@@ -7,7 +7,7 @@ plugin pane.
 
 ![asgoto demo: popup over herdr, fuzzy search, process rows with ports, workspace switch](docs/demo.gif)
 
-## Install as a herdr plugin
+## Install
 
 Requires herdr >= 0.7.5 on macOS or Linux:
 
@@ -38,29 +38,16 @@ command = "asumaran.asgoto.open"
 description = "asgoto (bubbletea tree: type to search)"
 ```
 
-The pane opens as a session-modal `popup` (55% x 50%, sized in the manifest)
+The pane opens as a session-modal `popup` (55% x 90%, sized in the manifest)
 with keyboard focus. herdr injects `HERDR_BIN_PATH` / `HERDR_SOCKET_PATH` (so
 the binary talks to the same herdr server) and `HERDR_PLUGIN_STATE_DIR`, where
 runtime state (the settings `panes` and `order`, and `prcache.json`) lives.
 
-## Keys
+## Usage
 
-| Key | Action |
-| --- | --- |
-| type | fuzzy search |
-| `↑` `↓`, `ctrl+p` `ctrl+n` | move |
-| PgDn/PgUp | move a page |
-| `alt+↑` `alt+↓`, Home/End | top or bottom of the list |
-| `f1` | open the panel: the order and the panes to change in place, and every key (`esc` closes it) |
-| `enter` | switch to the selected row |
-| `ctrl+a` | show or hide panes |
-| `ctrl+y` | copy the path of the selected row to the clipboard (a repo's or worktree's checkout, a pane's working directory); the help line confirms it |
-| `esc`, `ctrl+c`, `q` with an empty filter | quit |
-| click, mouse wheel | move the cursor (never selects) |
+The filter input is focused on open, so just type.
 
-Both toggles are remembered between sessions.
-
-## What it shows
+### What it shows
 
 The list is a tree: each repo (its main checkout) with its worktrees under
 it. Panes are hidden until you press `ctrl+a`. The exception is a pane running
@@ -90,7 +77,7 @@ Around each name:
   then `↑2` to push and `↓1` to pull, then `+n` staged, `!n`
   unstaged and `?n` untracked. Anything at zero is hidden.
 
-## Search
+### Search
 
 Typing filters the tree with fuzzy matching. A query of several words matches them in any order (`login fix` finds "fix login flow"), and a word starting with `'` must occur as typed instead of fuzzily (`'dex`). In the tree a word may match the row and another one of its parents (`herdr fix` finds the fix worktree of herdr). The query is matched against the
 row name, the branch, the worktree folder, the Jira ticket, the PR number and
@@ -102,7 +89,7 @@ so typing "h" lands on herdr.
 Digits are plain search text. There is no "press 1-9 to jump to a repo"
 shortcut because it would conflict with searching by PR or ticket number.
 
-## Order
+### Order
 
 By default repos follow the sidebar's order, and the worktrees inside a repo
 go oldest first by checkout creation time, which tracks PR order in practice.
@@ -114,7 +101,7 @@ the most recent state change goes first. A repo's own panes stay above its
 worktrees. The frame's top border shows the rows listed out of the total and which
 order is active (`sort: spaces` or `sort: priority`).
 
-## Selecting
+### Selecting
 
 The cursor starts on the space asgoto was opened from, so `enter` on an empty
 query changes nothing. `enter` on a repo or worktree switches to that space
@@ -128,17 +115,35 @@ for a moment, or `nothing to copy` when herdr reported no directory for the
 row. `ASGOTO_CLIPBOARD` replaces the clipboard command the path is fed to
 (`pbcopy` on macOS, else `wl-copy`, `xclip` or `xsel`).
 
-## Optional tools
+### Keys
 
-PR numbers need `gh` (authenticated) and a GitHub remote. Ports need `lsof`.
-Without them asgoto still works and leaves those columns out.
+| key | action |
+| --- | --- |
+| type | fuzzy search |
+| `↑` `↓`, `ctrl+p` `ctrl+n` | move |
+| PgDn/PgUp | move a page |
+| `alt+↑` `alt+↓`, Home/End | top or bottom of the list |
+| `f1` | open the panel: the order and the panes to change in place, and every key (`esc` closes it) |
+| `enter` | switch to the selected row |
+| `ctrl+a` | show or hide panes |
+| `ctrl+y` | copy the path of the selected row to the clipboard (a repo's or worktree's checkout, a pane's working directory); the help line confirms it |
+| `esc`, `ctrl+c`, `q` with an empty filter | quit |
+| click, mouse wheel | move the cursor (never selects) |
 
-The git hints come from one `git status` per checkout, run in the background
-once the list is on screen. The last known values are cached, so they paint
-right away and get corrected if anything changed. On a large repo `git status`
-costs about 1s of CPU, which `core.fsmonitor=true` removes.
+## Behavior notes
 
-## Develop
+- The only thing asgoto changes in herdr is the focus: the space or the pane
+  `enter` lands on. Everything else (herdr, git, `gh`, `lsof`) is read.
+- The panes and the order are remembered between sessions, like every option
+  of the panel.
+- PR numbers need `gh` (authenticated) and a GitHub remote. Ports need `lsof`.
+  Without them asgoto still works and leaves those columns out.
+- The git hints come from one `git status` per checkout, run in the background
+  once the list is on screen. The last known values are cached, so they paint
+  right away and get corrected if anything changed. On a large repo
+  `git status` costs about 1s of CPU, which `core.fsmonitor=true` removes.
+
+## Development
 
 ```bash
 go build -o asgoto .             # local build inside the repo
@@ -172,12 +177,16 @@ commands, so build the binary yourself first with `go build -o asgoto .`. Don't
 run `fetch-binary.sh` for this: it would fetch the released build instead of
 your changes.
 
-## Release
+## Demo recording
 
-```bash
-scripts/release.sh 0.2.0       # gate, tag, push, publish the GitHub release; CI attaches the binary
-```
+`docs/demo.gif` is recorded with
+[asdemokit](https://github.com/asumaran/asdemokit): `asdemo
+record` from the repo root replays `scripts/demo/keys.json` against an
+isolated herdr session described by `scripts/demo/scenario.sh`.
 
-The release assets (`asgoto-<os>-<arch>`, macOS and Linux, arm64 and amd64) are
-what `fetch-binary.sh` downloads on plugin installs, so every release must keep
-attaching them.
+## Releasing
+
+`scripts/release.sh <X.Y.Z>` gates on a clean tree + green vet/build/test,
+generates the CHANGELOG entry from commit subjects, syncs the manifest
+version, commits, tags and publishes the GitHub release; CI then attaches
+the `asgoto-<os>-<arch>` binaries (macOS and Linux, arm64 and amd64), the assets `fetch-binary.sh` downloads on installs.
