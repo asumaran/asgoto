@@ -7,8 +7,8 @@ touching the tree building, the filter, the right column or the caches in
 
 
 - Tree = two levels by default: repo (== main checkout) -> worktrees. Panes are
-  hidden by default; `ctrl+a` toggles them, persisted in `state.json`
-  (`{"show_panes":bool,"priority_sort":bool}`, under `HERDR_PLUGIN_STATE_DIR`
+  hidden by default; `ctrl+a` toggles them, persisted as the settings `panes`
+  and `order` (one file each, `setting.go`, under `HERDR_PLUGIN_STATE_DIR`
   as a plugin, the same `~/.local/state/herdr/plugins/asumaran.asgoto/`
   standalone).
 - Repos ordered by lowest workspace `number`. Worktrees inside a repo sort
@@ -125,7 +125,7 @@ touching the tree building, the filter, the right column or the caches in
   state (open green, draft dim, merged purple, closed red). Columns align per
   sibling group; rows with neither ticket nor PR get no prefix. PR data comes
   from one async `gh pr list` per unique GitHub repo, fired after the TUI is
-  on screen, and cached in `prcache.json` next to `state.json`
+  on screen, and cached in `prcache.json` next to the settings
   (stale-while-revalidate; entries fresher than 60s skip the refresh).
   Missing `gh` or non-GitHub remotes degrade silently to no PR info.
 - herdr surface asgoto depends on. Read: `workspace list`, `pane list`,

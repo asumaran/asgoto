@@ -41,7 +41,7 @@ description = "asgoto (bubbletea tree: type to search)"
 The pane opens as a session-modal `popup` (55% x 50%, sized in the manifest)
 with keyboard focus. herdr injects `HERDR_BIN_PATH` / `HERDR_SOCKET_PATH` (so
 the binary talks to the same herdr server) and `HERDR_PLUGIN_STATE_DIR`, where
-runtime state (`state.json`, `prcache.json`) lives.
+runtime state (the settings `panes` and `order`, and `prcache.json`) lives.
 
 ## Keys
 

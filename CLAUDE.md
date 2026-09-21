@@ -43,6 +43,10 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
 - `statedir.go` — `stateDirFor`: the state dir herdr injects, or a fixed path
   under the config home when the tool runs on its own. The same file in every
   tool of the family that keeps state.
+- `setting.go` — `loadSetting`, `saveSetting`: a setting the tool remembers,
+  one plain-text file each in the state dir. Every option of the panel is
+  kept this way, per tool. The same file in every tool of the family that
+  needs it.
 - `listmouse.go` — `inList`, `rowUnder`, `wheelKey`: the mouse over the list.
   The wheel goes through the same code as the arrows; a click moves the
   cursor and never opens anything. The same file in every tool of the family.
@@ -135,7 +139,9 @@ command = "asumaran.asgoto.open"
   working copy. `plugin link` does **not** run build commands — run `go build -o asgoto .`
   yourself (not `fetch-binary.sh`, which would fetch the released build over
   your local changes); the pane runs `./asgoto` from the plugin root.
-- Runtime state (`state.json`, `prcache.json`) lives in
+- Runtime state (one file per setting, `panes` and `order`, through
+  `setting.go`, and `prcache.json`; a `state.json` from before is still read
+  until a setting is saved) lives in
   `HERDR_PLUGIN_STATE_DIR` (herdr injects it; never store state in the plugin
   checkout). When run standalone (outside herdr, e.g. `./asgoto -dump`),
   `statedir.go` falls back to the same directory

@@ -956,3 +956,27 @@ func TestLoadJSONReportsAMissingHerdr(t *testing.T) {
 		t.Error("loadJSON with no herdr binary returned no error")
 	}
 }
+
+// TestStateIsOneFilePerSetting: the panes and the order are remembered like
+// the settings of every tool of the family, and a state.json from before is
+// still read until something is saved.
+func TestStateIsOneFilePerSetting(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", dir)
+	if got := loadState(); got != (persisted{}) {
+		t.Errorf("nothing saved = %+v", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"show_panes":true,"priority_sort":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadState(); !got.ShowPanes || !got.PrioritySort {
+		t.Errorf("the old state.json should still count: %+v", got)
+	}
+	saveStateCmd(persisted{ShowPanes: true})()
+	if got := loadState(); got != (persisted{ShowPanes: true}) {
+		t.Errorf("after a save the files win: %+v", got)
+	}
+	if loadSetting(dir, "panes") != "shown" || loadSetting(dir, "order") != "spaces" {
+		t.Errorf("files = %q %q", loadSetting(dir, "panes"), loadSetting(dir, "order"))
+	}
+}

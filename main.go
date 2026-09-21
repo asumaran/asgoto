@@ -125,29 +125,38 @@ type node struct {
 
 // ---- persisted UI state ----
 
+// persisted is what asgoto remembers: one file per setting in its state
+// directory (setting.go), as in every tool of the family.
 type persisted struct {
 	ShowPanes    bool `json:"show_panes"`
 	PrioritySort bool `json:"priority_sort"`
 }
 
-// stateFile is where asgoto remembers its settings.
-func stateFile() string { return filepath.Join(stateDirFor("asgoto"), "state.json") }
+func stateDir() string { return stateDirFor("asgoto") }
 
 func loadState() persisted {
-	var s persisted
-	if data, err := os.ReadFile(stateFile()); err == nil {
-		_ = json.Unmarshal(data, &s)
+	panes, order := loadSetting(stateDir(), "panes"), loadSetting(stateDir(), "order")
+	if panes == "" && order == "" {
+		// Before each setting had its file, both lived in state.json.
+		var old persisted
+		if data, err := os.ReadFile(filepath.Join(stateDir(), "state.json")); err == nil && json.Unmarshal(data, &old) == nil {
+			return old
+		}
 	}
-	return s
+	return persisted{ShowPanes: panes == "shown", PrioritySort: order == "priority"}
 }
 
 func saveStateCmd(s persisted) tea.Cmd {
 	return func() tea.Msg {
-		if data, err := json.Marshal(s); err == nil {
-			path := stateFile()
-			_ = os.MkdirAll(filepath.Dir(path), 0o755)
-			_ = os.WriteFile(path, data, 0o644)
+		panes, order := "hidden", "spaces"
+		if s.ShowPanes {
+			panes = "shown"
 		}
+		if s.PrioritySort {
+			order = "priority"
+		}
+		saveSetting(stateDir(), "panes", panes)
+		saveSetting(stateDir(), "order", order)
 		return nil
 	}
 }
@@ -201,7 +210,7 @@ type prCache struct {
 const prCacheFresh = 60 * time.Second
 
 func prCacheFile() string {
-	return filepath.Join(filepath.Dir(stateFile()), "prcache.json")
+	return filepath.Join(stateDir(), "prcache.json")
 }
 
 func loadPRCache() prCache {
