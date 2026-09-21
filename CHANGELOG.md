@@ -1,3 +1,7 @@
+## v0.21.1 (2026-09-20)
+
+* refactor(state): keep one file per setting (d788f8f)
+
 ## v0.21.0 (2026-09-20)
 
 * feat(ui): open an options and keys panel with f1 (10f6455)
