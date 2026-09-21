@@ -1361,11 +1361,11 @@ var (
 	stSortOff = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 
 	// Ticket / PR prefix: ticket in teal, PR number colored by state.
-	stTicket   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))   // teal
-	stPROpen   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))  // green
-	stPRDraft  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))   // dim
-	stPRMerged = lipgloss.NewStyle().Foreground(lipgloss.Color("135")) // purple
-	stPRClosed = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))   // red
+	stTicket   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))  // teal
+	stPROpen   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
+	stPRDraft  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // dim
+	stPRMerged = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))  // purple (ANSI, so it follows the theme)
+	stPRClosed = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
 
 	// Gutter status dots, mirroring herdr's sidebar state_dot.
 	stDotBlocked = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
