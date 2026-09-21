@@ -43,3 +43,15 @@ func helpLine(h help.Model, keys help.KeyMap, width int) string {
 	line, _, _ := strings.Cut(h.View(keys), "\n")
 	return ansi.Truncate(line, max(0, width), "…")
 }
+
+// footLine is the line at the foot: a confirmation while one is flashing,
+// else a notice (an error, in its color, until the next key), else the help.
+func footLine(f flash, notice string, h help.Model, keys help.KeyMap, width int) string {
+	switch {
+	case f.text != "":
+		return f.view(width)
+	case notice != "":
+		return stError.Render(truncate(notice, max(0, width)))
+	}
+	return helpLine(h, keys, width)
+}

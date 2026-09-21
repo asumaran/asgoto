@@ -250,3 +250,8 @@ func atWordStart(s string, i int) bool {
 	r, _ := utf8.DecodeLastRuneInString(s[:i])
 	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 }
+
+// hasTerms reports whether a query searches for anything. Spaces and a bare
+// `~` or `'` do not, so they must not filter, rank or move the cursor: every
+// tool asks this instead of comparing the input with "".
+func hasTerms(q string) bool { return len(queryTerms(q, true)) > 0 }

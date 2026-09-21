@@ -132,3 +132,11 @@ func TestFindFieldsExactTermAndBarePrefix(t *testing.T) {
 		t.Errorf("a bare prefix after a term: %v", hits)
 	}
 }
+
+func TestHasTerms(t *testing.T) {
+	for q, want := range map[string]bool{"": false, "  ": false, "~": false, "'": false, " ~ ' ": false, "a": true, " fix ": true, "'dex": true, "~x": true} {
+		if got := hasTerms(q); got != want {
+			t.Errorf("hasTerms(%q) = %v, want %v", q, got, want)
+		}
+	}
+}

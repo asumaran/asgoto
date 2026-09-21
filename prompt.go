@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -78,4 +79,15 @@ func withDevMark(status string) string {
 		return mark
 	}
 	return status + " " + mark
+}
+
+// typeInto hands a message to the filter input and reports whether that
+// changed the query: a key, a paste from the terminal (tea.PasteMsg) and the
+// input's own ctrl+v all edit it, the cursor's blink and a key that only
+// moves the caret do not. The caller filters again only when it did.
+func typeInto(ti *textinput.Model, msg tea.Msg) (tea.Cmd, bool) {
+	before := ti.Value()
+	var cmd tea.Cmd
+	*ti, cmd = ti.Update(msg)
+	return cmd, ti.Value() != before
 }

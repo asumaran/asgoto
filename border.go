@@ -8,6 +8,7 @@ package main
 
 import (
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"strconv"
 	"strings"
@@ -60,4 +61,29 @@ func scrollPos(vp *viewport.Model) string {
 		return ""
 	}
 	return stDim.Render(strconv.Itoa(min(total, vp.YOffset()+vp.Height())) + "/" + strconv.Itoa(total))
+}
+
+// fitLines is content as exactly height lines of width cells.
+func fitLines(content string, height, width int) []string {
+	lines := strings.Split(content, "\n")
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	lines = lines[:max(0, height)]
+	for i, l := range lines {
+		lines[i] = fit(l, width)
+	}
+	return lines
+}
+
+// popupView is a frame as the tea.View every tool returns: the alt screen
+// and, while mouse is set, cell-motion mouse reports. Both are declared per
+// frame; there is no tea.WithAltScreen program option in v2.
+func popupView(content string, mouse bool) tea.View {
+	v := tea.NewView(content)
+	v.AltScreen = true
+	if mouse {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	return v
 }

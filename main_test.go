@@ -599,7 +599,7 @@ func TestFrameGeometry(t *testing.T) {
 	}
 	plain := strings.Split(ansi.Strip(m.render()), "\n")
 	if !strings.HasPrefix(plain[0], "╭") || !strings.HasPrefix(plain[len(plain)-1], "╰") ||
-		!strings.HasPrefix(plain[mainY], "├") || !strings.HasPrefix(plain[listY], "│") {
+		!strings.HasPrefix(plain[mainY(false)], "├") || !strings.HasPrefix(plain[listY(false)], "│") {
 		t.Errorf("frame sections misplaced:\n%s", strings.Join(plain, "\n"))
 	}
 	if help := plain[len(plain)-2]; !strings.Contains(help, "type filter") || !strings.Contains(help, "esc/q quit") {
@@ -994,4 +994,62 @@ func TestEmptyTreeSaysWhy(t *testing.T) {
 	if len(m.rows) != 0 || !strings.HasPrefix(plain[3], "│ No matches") || len(plain) != m.height {
 		t.Errorf("rows=%d, first list line %q, %d lines", len(m.rows), plain[3], len(plain))
 	}
+}
+
+// TestPasteFilters: a paste changes the query without a key press, and the
+// tree must follow it (toInput). A key that leaves the query alone must not
+// move the cursor, and clearing the query keeps the cursor on its node.
+func TestPasteFilters(t *testing.T) {
+	m := copyModel(t, t.TempDir())
+	m.ti = newFilterInput("asgoto", "Search…")
+	step := func(msg tea.Msg) {
+		res, _ := m.Update(msg)
+		m = res.(model)
+	}
+	step(tea.PasteMsg{Content: "zzzzqq"})
+	if m.ti.Value() != "zzzzqq" || len(m.rows) != 0 {
+		t.Fatalf("a paste should filter: query %q, %d rows", m.ti.Value(), len(m.rows))
+	}
+	for range "zzzzqq" {
+		step(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+	step(tea.KeyPressMsg{Code: tea.KeyDown})
+	at := m.rows[m.cursor].n
+	step(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.rows[m.cursor].n != at {
+		t.Errorf("a key that does not edit the query moved the cursor off %q", at.label)
+	}
+	step(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	on := m.rows[m.cursor].n
+	step(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if m.rows[m.cursor].n != on {
+		t.Errorf("clearing the query should stay on %q, the cursor is on %q", on.label, m.rows[m.cursor].n.label)
+	}
+}
+
+// TestEnterOnAnEmptyTreeStays: with nothing under the cursor enter does
+// nothing, as in every tool of the family; it used to close the popup.
+func TestEnterOnAnEmptyTreeStays(t *testing.T) {
+	m := copyModel(t, t.TempDir())
+	m.ti = newFilterInput("asgoto", "Search…")
+	res, _ := m.Update(tea.PasteMsg{Content: "zzzzqq"})
+	m = res.(model)
+	res, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := res.(model); cmd != nil || got.action != nil || got.focusPane != "" {
+		t.Errorf("enter on an empty tree: cmd=%v action=%v pane=%q", cmd, got.action, got.focusPane)
+	}
+}
+
+// TestMain sandboxes the state dir: tests must never touch the real one, even
+// one that forgets to set it.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "asgoto-test")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HERDR_PLUGIN_STATE_DIR", dir)
+	os.Setenv("XDG_CACHE_HOME", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }

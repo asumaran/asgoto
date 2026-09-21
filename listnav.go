@@ -103,12 +103,20 @@ func scrollTo(offset, height, count, cursor, top int) int {
 // that kept it from loading, that the query matches nothing, or the tool's
 // own reason (nothing to list, still loading).
 func emptyList(err, query, reason string, width int) string {
-	msg := reason
 	switch {
 	case err != "":
-		msg = err
+		return stError.Render(truncate(" "+err, width)) // an error looks like one, here as on the help line
 	case query != "":
-		msg = "No matches"
+		reason = "No matches"
 	}
-	return stDim.Render(truncate(" "+msg, width))
+	return stDim.Render(truncate(" "+reason, width))
+}
+
+// withHeader is the row to bring into view with the cursor when scrolling up:
+// the header of its group when that is the row right above, else the cursor.
+func withHeader(cursor, count int, header func(int) bool) int {
+	if cursor > 0 && cursor < count && header(cursor-1) {
+		return cursor - 1
+	}
+	return cursor
 }

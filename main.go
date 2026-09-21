@@ -1278,7 +1278,7 @@ type keyMap struct {
 	Select key.Binding
 	Toggle key.Binding
 	Copy   key.Binding
-	Cancel key.Binding
+	Quit   key.Binding
 	Filter key.Binding
 	Help   key.Binding
 }
@@ -1287,7 +1287,7 @@ type keyMap struct {
 // quit keys. The list's keys (listnav.go) and the copy key are in the panel:
 // at the popup's 55% width the line would be cut before the quit keys.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Filter, k.Select, k.Toggle, k.Help, k.Cancel}
+	return []key.Binding{k.Filter, k.Select, k.Toggle, k.Help, k.Quit}
 }
 
 // FullHelp is the panel's list of keys, one column per group: the filter, the
@@ -1297,7 +1297,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Filter},
 		{k.Nav.Up, k.Nav.PageUp, k.Nav.Top},
 		{k.Select, k.Toggle, k.Copy},
-		{k.Help, k.Cancel},
+		{k.Help, k.Quit},
 	}
 }
 
@@ -1307,7 +1307,7 @@ func defaultKeys() keyMap {
 		Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		Toggle: key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("^a", "panes")),
 		Copy:   key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("^y", "copy the path")),
-		Cancel: key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc/q", "quit")),
+		Quit:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc/q", "quit")),
 		// Help-only entry: a binding without keys is disabled and the help
 		// bubble would skip it. Nothing ever matches against it.
 		Filter: key.NewBinding(key.WithKeys("type"), key.WithHelp("type", "filter")),
@@ -1359,6 +1359,7 @@ var (
 
 	stSortOn  = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
 	stSortOff = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	stError   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true) // the shared foot line and empty list use it
 
 	// Ticket / PR prefix: ticket in teal, PR number colored by state.
 	stTicket   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))  // teal
@@ -2034,10 +2035,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// A left click on a row moves the cursor; it never selects, so a stray
 		// click cannot switch spaces (same reasoning as asgotopr).
-		if m.panel.open || msg.Button != tea.MouseLeft || !inList(msg.X, msg.Y, listY, m.innerW(), m.vp.Height()) {
+		if m.panel.open || msg.Button != tea.MouseLeft || !inList(msg.X, msg.Y, listY(false), m.innerW(), m.vp.Height()) {
 			return m, nil
 		}
-		if i, ok := rowUnder(msg.Y, listY, m.vp.YOffset(), len(m.rows)); ok && i != m.cursor {
+		if i, ok := rowUnder(msg.Y, listY(false), m.vp.YOffset(), len(m.rows)); ok && i != m.cursor {
 			m.cursor = i
 			m.renderContent()
 		}
@@ -2059,16 +2060,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.String() == "q" && m.ti.Value() == "":
 			// q quits only while the filter is empty; otherwise it is text.
 			return m, tea.Quit
-		case key.Matches(msg, m.keys.Cancel):
+		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.Select):
-			if m.cursor >= 0 && m.cursor < len(m.rows) {
-				n := m.rows[m.cursor].n
-				if n.kind == "pane" {
-					m.focusPane = n.paneID
-				} else {
-					m.action = []string{"workspace", "focus", n.wsID}
-				}
+			if m.cursor < 0 || m.cursor >= len(m.rows) {
+				return m, nil // nothing under the cursor: the popup stays, as in every tool
+			}
+			n := m.rows[m.cursor].n
+			if n.kind == "pane" {
+				m.focusPane = n.paneID
+			} else {
+				m.action = []string{"workspace", "focus", n.wsID}
 			}
 			return m, tea.Quit
 		case m.keys.Nav.matches(msg):
@@ -2087,41 +2089,54 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, copyCmd("asgoto", homeRel(path), path)
 		}
 
-		var cmd tea.Cmd
-		m.ti, cmd = m.ti.Update(msg)
-		m.applyFilter()
-		if m.ti.Value() != "" {
-			m.selectBestMatch()
+		return m.toInput(msg)
+
+	case tea.PasteMsg:
+		if m.panel.open {
+			return m, nil // nothing is typed under the panel
 		}
-		m.renderContent()
-		return m, cmd
+		return m.toInput(msg)
 
 	default:
-		var cmd tea.Cmd
-		m.ti, cmd = m.ti.Update(msg)
-		return m, cmd
+		// Whatever else the input takes (its own paste, the cursor's blink).
+		return m.toInput(msg)
 	}
 }
 
-// View declares the screen: alt screen and cell-motion mouse reports.
-func (m model) View() tea.View {
-	v := tea.NewView(m.render())
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
-	return v
+// toInput hands a message to the filter input and, when that changed the
+// query, filters again: a key, a paste from the terminal (tea.PasteMsg) or the
+// input's own ctrl+v all come through here, so the tree never lags behind
+// what the input shows. A message that leaves the query alone moves nothing:
+// the cursor stays on the row it was on.
+func (m model) toInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cur *node
+	if m.cursor >= 0 && m.cursor < len(m.rows) {
+		cur = m.rows[m.cursor].n
+	}
+	cmd, changed := typeInto(&m.ti, msg)
+	if !changed {
+		return m, cmd
+	}
+	m.applyFilter()
+	if hasTerms(m.ti.Value()) {
+		m.selectBestMatch()
+	} else {
+		// Clearing the query rebuilt the rows; stay on the same node instead
+		// of whatever now sits at the old cursor index.
+		m.keepCursorOn(cur)
+	}
+	m.renderContent()
+	return m, cmd
 }
 
-// The screen is one rounded frame of sections split by shared edges, the
-// layout asgitlog introduced and the other pickers share: the filter input
-// (the top border over it carries the matches/total counter and the active
-// order), the tree, and the help. There is no context line: nothing here needs
-// one. asgoto has no preview either, so the tree takes the whole main section
-// and its bottom edge carries the list position.
-const (
-	mainY     = 2 // the edge over the main section
-	listY     = mainY + 1
-	frameRows = 5 // top border, input, two edges, bottom border
-)
+// View declares the screen: alt screen and cell-motion mouse reports.
+func (m model) View() tea.View { return popupView(m.render(), true) }
+
+// The screen is the family's frame (frame.go): the filter input under a top
+// border that carries the active order, the tree, and the help line. There is
+// no context line: nothing here needs one. asgoto has no preview either, so
+// the tree takes the whole main section (no splitMain) and the edge under it
+// carries the matches/total counter.
 
 // innerW is the width inside the frame's sides.
 func (m model) innerW() int { return max(20, m.width-2) }
@@ -2129,11 +2144,7 @@ func (m model) innerW() int { return max(20, m.width-2) }
 // render stacks the four sections in one frame; the tests assert on it.
 func (m model) render() string {
 	w, side := m.width, stDim.Render("│")
-	out := []string{
-		hline(w, "╭", "╮", "", withDevMark(m.status())),
-		framed(w, m.ti.View()),
-		hline(w, "├", "┤", "", ""),
-	}
+	out := append(frameHead(w, "", withDevMark(m.status()), m.ti.View()), hline(w, "├", "┤", "", ""))
 	lines := strings.Split(m.vp.View(), "\n")
 	if len(m.rows) == 0 {
 		// Nothing to list: say why, as every tool of the family does.
@@ -2146,7 +2157,7 @@ func (m model) render() string {
 		}
 		out = append(out, side+fit(l, m.innerW())+side)
 	}
-	out = append(out, hline(w, "├", "┤", "", m.counter()), framed(w, m.footLine()), hline(w, "╰", "╯", "", ""))
+	out = append(out, hline(w, "├", "┤", "", m.counter()), framed(w, footLine(m.flash, "", m.help, m.keys, w-4)), hline(w, "╰", "╯", "", ""))
 	if m.panel.open {
 		keys := keyLines(m.help, m.keys, w-10)
 		out = overlay(out, panelLines(m.options(), m.panel.cursor, keys, w-4, len(out)-2), w)
@@ -2191,25 +2202,9 @@ func (m *model) setOption(id string, v int) tea.Cmd {
 	return saveStateCmd(m.persisted())
 }
 
-// footMsg is what takes the help's place while there is something to say.
-// asgoto has no error or notice of its own, so that is only the flash.
-func (m model) footMsg() string {
-	if m.flash.text != "" {
-		return m.flash.view(m.width - 4)
-	}
-	return ""
-}
-
-func (m model) footLine() string {
-	if msg := m.footMsg(); msg != "" {
-		return msg
-	}
-	return helpLine(m.help, m.keys, m.width-4)
-}
-
 // fitBody gives the tree the lines the frame and the help line leave.
 func (m *model) fitBody() {
-	m.vp.SetHeight(max(1, m.height-frameRows-1))
+	m.vp.SetHeight(max(1, m.height-frameRows(false)-1))
 	m.renderContent()
 }
 
@@ -2259,12 +2254,10 @@ func main() {
 	var ws wsResp
 	var pn paneResp
 	if err := loadJSON([]string{"workspace", "list"}, &ws); err != nil {
-		fmt.Fprintln(os.Stderr, "asgoto: herdr workspace list:", err)
-		os.Exit(1)
+		fatal("asgoto", "herdr workspace list: "+err.Error())
 	}
 	if err := loadJSON([]string{"pane", "list"}, &pn); err != nil {
-		fmt.Fprintln(os.Stderr, "asgoto: herdr pane list:", err)
-		os.Exit(1)
+		fatal("asgoto", "herdr pane list: "+err.Error())
 	}
 	// Only feeds the priority order's tiebreaker, so a failure (older herdr)
 	// degrades to ordering by status alone.
