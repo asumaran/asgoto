@@ -61,7 +61,9 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   `overlay`). The same file in every tool of the family.
 - `listnav.go` — `listNav`: the keys that move the cursor through a list and
   where each one takes it, group headers skipped. `scrollTo` keeps the
-  cursor in view, with the header of its group when there is one. The same file in every tool
+  cursor in view, with the header of its group when there is one. `emptyList`
+  is what a list says instead of rows: the error, `No matches`, or the
+  tool's own reason. The same file in every tool
   of the family.
 - `highlight.go` — `highlight`/`highlightFrom`, `matchOver`, `onSel`,
   `selPad` and the `stSel`/`stMatch` styles: how a match and the selected row
@@ -108,17 +110,6 @@ scripts/pty-check.py ./asgoto   # end-to-end TUI check on a pty (python3 + pyte)
 `-ldflags "-X main.version=<tag>"` (CI does this from the release tag;
 `fetch-binary.sh`'s source fallback stamps `v<version>-source`).
 
-## Testing
-
-For end-to-end verification without a TTY, `scripts/pty-check.py ./asgoto`
-(python3 + `pyte`) spawns the binary on a pty, answers the terminal queries,
-replays keystrokes and asserts on pyte-rendered frames, in a throwaway sandbox
-(a herdr stub as `HERDR_BIN_PATH` serving a synthetic session and logging
-every call, no socket, a `gh` stub first on `PATH`, a clipboard stub as
-`ASGOTO_CLIPBOARD` logging what `ctrl+y` feeds it). It also runs `-dump` and
-`-dump -query` without a pty against the same stubs. The v2 renderer repaints with scroll regions, which pyte ignores, so the
-driver forces a full redraw (pty resize + SIGWINCH) before reading a frame.
-
 ## How it's wired into herdr
 
 The plugin requires herdr >= 0.7.5. The manifest declares the `picker` popup
@@ -147,25 +138,6 @@ command = "asumaran.asgoto.open"
   checkout). When run standalone (outside herdr, e.g. `./asgoto -dump`),
   `statedir.go` falls back to the same directory
   (`~/.local/state/herdr/plugins/asumaran.asgoto/`).
-
-## Releasing
-
-`scripts/release.sh <X.Y.Z>` does everything: gates on a clean tree and green
-`go vet`/`go build`/`go test`, syncs `version` in `herdr-plugin.toml`,
-with `--demo` re-records `docs/demo.gif` with `asdemo record` (opt-in: it takes
-over a herdr session; a failed recording aborts before anything is committed),
-writes the
-`CHANGELOG.md` entry and release notes from commit subjects, commits
-(`chore(release): vX.Y.Z`), tags, pushes and publishes the GitHub release. CI
-(`.github/workflows/release.yml`) builds the platforms the manifest declares (macOS and Linux, arm64 and amd64)
-and attaches them; those assets are what `fetch-binary.sh` downloads on
-installs, so they must keep being published. `release.sh` and `release.yml`
-are the same files in every plugin of the family: they read the repository
-name and the manifest instead of naming the tool.
-
-Releasing never touches this machine's linked plugin. After a release, offer
-to run `scripts/fetch-binary.sh` to install the published build over `./asgoto`;
-never do it as a side effect. `go build -o asgoto .` switches back to a dev build.
 
 ## Behaviour / decisions
 
@@ -211,7 +183,7 @@ Non-negotiables that are not obvious from the code:
   `setOption` is the one place that changes a setting, for the panel and for
   the keys that kept a shortcut. A setting that is chosen once has no key of
   its own; the panel is where it lives.
-- **Copying**: `ctrl+y` copies the directory of the row under the cursor
+- **Copy**: `ctrl+y` copies the directory of the row under the cursor
   (`nodeDir`: the checkout of a repo or worktree, a pane's `cwd`, and the
   first pane's `cwd` for a space that is no git checkout) with `copyCmd`
   (`clipboard.go`). The clipboard gets the absolute path and the help line
@@ -238,6 +210,12 @@ Non-negotiables that are not obvious from the code:
   ends a match would cut the background: every piece is rendered over `stSel`
   (`highlight(s, idx, stSel)`) and `selPad` fills the rest. Do not write a
   local highlighter.
+- **Alt screen and mouse mode** are declared per frame in `View()`; there is
+  no `tea.WithAltScreen` program option in v2.
+- **Settings**: the panes and the order are one file each in the state dir
+  (`panes`, `order`; `setting.go`, the same file in every tool of the family
+  that remembers an option). A `state.json` from before is read until a
+  setting is saved.
 - **Mouse**: a left click on a row moves the cursor and never selects, so a
   stray click cannot switch spaces; the wheel walks the cursor a row at a time
   (there is no preview to scroll). `q` quits only while the filter is empty.
@@ -257,6 +235,17 @@ Non-negotiables that are not obvious from the code:
   that are already sized from `prcache.json`.
 - No breadcrumb line under the prompt (removed as redundant with the tree).
 
+## Testing
+
+For end-to-end verification without a TTY, `scripts/pty-check.py ./asgoto`
+(python3 + `pyte`) spawns the binary on a pty, answers the terminal queries,
+replays keystrokes and asserts on pyte-rendered frames, in a throwaway sandbox
+(a herdr stub as `HERDR_BIN_PATH` serving a synthetic session and logging
+every call, no socket, a `gh` stub first on `PATH`, a clipboard stub as
+`ASGOTO_CLIPBOARD` logging what `ctrl+y` feeds it). It also runs `-dump` and
+`-dump -query` without a pty against the same stubs. The v2 renderer repaints with scroll regions, which pyte ignores, so the
+driver forces a full redraw (pty resize + SIGWINCH) before reading a frame.
+
 ## Commits & branches
 
 - Conventional Commits: `type(scope): description` (feat, fix, chore, docs,
@@ -264,3 +253,22 @@ Non-negotiables that are not obvious from the code:
 - Never mention AI tooling in commits, PRs, or any repo-visible text.
 - Default branch is `main`. Don't commit, tag, or push unless explicitly asked
   (releasing is an explicit, separate request).
+
+## Releasing
+
+`scripts/release.sh <X.Y.Z>` does everything: gates on a clean tree and green
+`go vet`/`go build`/`go test`, syncs `version` in `herdr-plugin.toml`,
+with `--demo` re-records `docs/demo.gif` with `asdemo record` (opt-in: it takes
+over a herdr session; a failed recording aborts before anything is committed),
+writes the
+`CHANGELOG.md` entry and release notes from commit subjects, commits
+(`chore(release): vX.Y.Z`), tags, pushes and publishes the GitHub release. CI
+(`.github/workflows/release.yml`) builds the platforms the manifest declares (macOS and Linux, arm64 and amd64)
+and attaches them; those assets are what `fetch-binary.sh` downloads on
+installs, so they must keep being published. `release.sh` and `release.yml`
+are the same files in every plugin of the family: they read the repository
+name and the manifest instead of naming the tool.
+
+Releasing never touches this machine's linked plugin. After a release, offer
+to run `scripts/fetch-binary.sh` to install the published build over `./asgoto`;
+never do it as a side effect. `go build -o asgoto .` switches back to a dev build.
