@@ -18,11 +18,11 @@ import (
 // the confirmation calls it when the text itself is too long to show.
 func copyCmd(tool, label, text string) tea.Cmd {
 	if text == "" {
-		return func() tea.Msg { return flashMsg("nothing to copy") }
+		return func() tea.Msg { return flashErrMsg("nothing to copy") }
 	}
 	return func() tea.Msg {
 		if err := copyToClipboard(tool, text); err != nil {
-			return flashMsg("copy failed: " + err.Error())
+			return flashErrMsg("copy failed: " + err.Error())
 		}
 		if label == "" {
 			label = text

@@ -53,7 +53,7 @@ func TestSearchByTicketAndPRNumber(t *testing.T) {
 	roots := []*node{repo}
 
 	m := model{roots: roots, ti: textinput.New()}
-	m.allNodes, m.lowerLabels, m.lowerBranches = flatten(roots)
+	m.allNodes, m.labels, m.branches = flatten(roots)
 	m.refreshMetas()
 
 	matched := func(query string) map[*node]bool {
@@ -86,7 +86,7 @@ func TestSearchByWorktreeFolder(t *testing.T) {
 	roots := []*node{repo}
 
 	m := model{roots: roots, ti: textinput.New()}
-	m.allNodes, m.lowerLabels, m.lowerBranches = flatten(roots)
+	m.allNodes, m.labels, m.branches = flatten(roots)
 	m.refreshMetas()
 	m.ti.SetValue("foo")
 	m.applyFilter()
@@ -1044,6 +1044,298 @@ func TestEnterOnAnEmptyTreeStays(t *testing.T) {
 	}
 }
 
+// isQuit reports whether cmd is tea.Quit.
+func isQuit(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+	return ok
+}
+
+// TestMouseWheelWalksTheCursor: there is no preview to scroll, so the wheel
+// moves the cursor like the arrows, stops at both ends and does nothing under
+// the panel.
+func TestMouseWheelWalksTheCursor(t *testing.T) {
+	m := copyModel(t, t.TempDir())
+	wheel := func(b tea.MouseButton) {
+		res, cmd := m.Update(tea.MouseWheelMsg{X: 3, Y: listY(false), Button: b})
+		if cmd != nil {
+			t.Errorf("the wheel returned a command")
+		}
+		m = res.(model)
+	}
+	wheel(tea.MouseWheelUp)
+	if m.cursor != 0 {
+		t.Errorf("wheel up on the first row: cursor %d, want 0", m.cursor)
+	}
+	for i := 1; i < len(m.rows); i++ {
+		wheel(tea.MouseWheelDown)
+		if m.cursor != i {
+			t.Fatalf("wheel down %d: cursor %d, want %d", i, m.cursor, i)
+		}
+	}
+	if line := strings.Split(ansi.Strip(m.render()), "\n")[listY(false)+m.cursor]; !strings.HasPrefix(line, "│· ▌") {
+		t.Errorf("the cursor bar did not follow the wheel: %q", line)
+	}
+	wheel(tea.MouseWheelDown)
+	if m.cursor != len(m.rows)-1 {
+		t.Errorf("wheel down on the last row: cursor %d, want %d", m.cursor, len(m.rows)-1)
+	}
+	wheel(tea.MouseWheelUp)
+	if m.cursor != len(m.rows)-2 {
+		t.Errorf("wheel up: cursor %d, want %d", m.cursor, len(m.rows)-2)
+	}
+	wheel(tea.MouseWheelLeft)
+	if m.cursor != len(m.rows)-2 {
+		t.Errorf("a sideways wheel moved the cursor to %d", m.cursor)
+	}
+	at := m.cursor
+	m.panel.open = true
+	wheel(tea.MouseWheelUp)
+	if m.cursor != at {
+		t.Errorf("the wheel under the panel moved the cursor to %d", m.cursor)
+	}
+}
+
+// TestClickMovesTheCursorOnly: a left click on a row moves the cursor and
+// never selects (a stray click must not switch spaces); the frame's own
+// lines, the empty lines under the last row, another button and a click under
+// the panel change nothing.
+func TestClickMovesTheCursorOnly(t *testing.T) {
+	m := copyModel(t, t.TempDir())
+	click := func(m model, x, y int, b tea.MouseButton) model {
+		t.Helper()
+		res, cmd := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: b})
+		got := res.(model)
+		if cmd != nil || got.action != nil || got.focusPane != "" {
+			t.Errorf("click at %d,%d selected: cmd=%v action=%v pane=%q", x, y, cmd, got.action, got.focusPane)
+		}
+		return got
+	}
+	for _, i := range []int{1, 2, 0} { // a worktree, a pane, a repo
+		m = click(m, 3, listY(false)+i, tea.MouseLeft)
+		if m.cursor != i {
+			t.Fatalf("click on row %d: cursor %d", i, m.cursor)
+		}
+		if line := strings.Split(ansi.Strip(m.render()), "\n")[listY(false)+i]; !strings.HasPrefix(line, "│· ▌") {
+			t.Errorf("the cursor bar did not follow the click: %q", line)
+		}
+	}
+	m = click(m, 3, listY(false)+1, tea.MouseLeft)
+	for _, c := range [][2]int{
+		{0, listY(false) + 2},                 // the frame's left side
+		{m.width - 1, listY(false) + 2},       // and its right side
+		{3, mainY(false)},                     // the edge over the list
+		{3, 1},                                // the input
+		{3, listY(false) + len(m.rows)},       // under the last row
+		{3, listY(false) + m.vp.Height()},     // the edge under the list
+		{3, listY(false) + m.vp.Height() + 1}, // the help line
+	} {
+		if got := click(m, c[0], c[1], tea.MouseLeft); got.cursor != 1 {
+			t.Errorf("click at %v moved the cursor to %d", c, got.cursor)
+		}
+	}
+	if got := click(m, 3, listY(false)+2, tea.MouseRight); got.cursor != 1 {
+		t.Errorf("a right click moved the cursor to %d", got.cursor)
+	}
+	m.panel.open = true
+	if got := click(m, 3, listY(false)+2, tea.MouseLeft); got.cursor != 1 {
+		t.Errorf("a click under the panel moved the cursor to %d", got.cursor)
+	}
+}
+
+// TestClickFollowsTheScroll: on a list taller than the tree the row under the
+// click is counted from the scroll offset, not from the top of the list.
+func TestClickFollowsTheScroll(t *testing.T) {
+	var roots []*node
+	for _, l := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
+		roots = append(roots, &node{kind: "repo", label: l, wsID: "w-" + l})
+	}
+	stampOrder(roots)
+	m := model{roots: roots, ti: textinput.New(), vp: viewport.New(viewport.WithWidth(98), viewport.WithHeight(3)),
+		help: help.New(), keys: defaultKeys(), width: 100, height: 9}
+	m.resort()
+	m.applyFilter()
+	m.cursor = len(m.rows) - 1
+	m.renderContent()
+	if m.vp.YOffset() != len(m.rows)-3 {
+		t.Fatalf("offset %d, want the last three rows on screen", m.vp.YOffset())
+	}
+	res, _ := m.Update(tea.MouseClickMsg{X: 3, Y: listY(false), Button: tea.MouseLeft})
+	if got := res.(model); got.rows[got.cursor].n.label != "f" {
+		t.Errorf("click on the first line on screen: cursor on %q, want f", got.rows[got.cursor].n.label)
+	}
+}
+
+// TestFrameGeometryAtSizes pins the frame invariant with rows in the tree, the
+// way the popup really runs: exactly height lines, each exactly width cells,
+// at the family's sizes plus a narrow one (under 2*sortLabelW+16 the order
+// label is dropped, and the right column gives way to the labels).
+func TestFrameGeometryAtSizes(t *testing.T) {
+	base := dumpModel()
+	base.showPanes = true
+	base.vp, base.help = viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)), help.New()
+	layoutPrefixes(base.roots)
+	layoutHints(base.allNodes)
+	base.applyFilter()
+	for _, size := range [][2]int{{94, 24}, {150, 16}, {61, 12}, {40, 10}} {
+		res, _ := base.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m := res.(model)
+		m.cursor = len(m.rows) - 1
+		m.renderContent()
+		lines := strings.Split(m.render(), "\n")
+		if len(lines) != size[1] {
+			t.Errorf("%v: %d lines, want %d", size, len(lines), size[1])
+		}
+		for i, l := range lines {
+			if w := ansi.StringWidth(l); w != size[0] {
+				t.Errorf("%v: line %d is %d cells, want %d: %q", size, i, w, size[0], ansi.Strip(l))
+			}
+		}
+		plain := strings.Split(ansi.Strip(m.render()), "\n")
+		if !strings.HasPrefix(plain[0], "╭") || !strings.HasPrefix(plain[len(plain)-1], "╰") ||
+			!strings.HasPrefix(plain[mainY(false)], "├") || !strings.HasPrefix(plain[listY(false)], "│") {
+			t.Errorf("%v: frame sections misplaced:\n%s", size, strings.Join(plain, "\n"))
+		}
+		// The cursor is on the last row, which the short sizes scroll to.
+		if at := plain[listY(false)+m.cursor-m.vp.YOffset()]; !strings.Contains(at, "▌ docs") {
+			t.Errorf("%v: the row under the cursor is not where the click math expects it: %q", size, at)
+		}
+		if edge := plain[len(plain)-3]; !strings.HasSuffix(edge, "─ 5/5 ─┤") {
+			t.Errorf("%v: edge under the list %q, want the counter", size, edge)
+		}
+		if got, want := strings.Contains(plain[0], "sort: spaces"), size[0] >= 2*sortLabelW+16; got != want {
+			t.Errorf("%v: order label on the top border = %v, want %v: %q", size, got, want, plain[0])
+		}
+		// With the panel over it the frame keeps its size.
+		m.panel.open = true
+		for i, l := range strings.Split(m.render(), "\n") {
+			if w := ansi.StringWidth(l); w != size[0] || i >= size[1] {
+				t.Errorf("%v: panel line %d is %d cells, want %d lines of %d", size, i, w, size[1], size[0])
+			}
+		}
+	}
+}
+
+// TestFrameKeepsOneTreeLine: the frame is never shorter than its five fixed
+// lines, the help and one line of tree (fitBody), so under seven lines it is
+// taller than the terminal by design; the width still holds.
+func TestFrameKeepsOneTreeLine(t *testing.T) {
+	base := copyModel(t, t.TempDir())
+	for _, size := range [][2]int{{40, 7}, {40, 6}, {40, 3}} {
+		res, _ := base.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m := res.(model)
+		lines := strings.Split(m.render(), "\n")
+		if want := frameRows(false) + 2; len(lines) != want || m.vp.Height() != 1 {
+			t.Errorf("%v: %d lines with a tree of %d, want %d with a tree of 1", size, len(lines), m.vp.Height(), want)
+		}
+		for i, l := range lines {
+			if w := ansi.StringWidth(l); w != size[0] {
+				t.Errorf("%v: line %d is %d cells, want %d: %q", size, i, w, size[0], ansi.Strip(l))
+			}
+		}
+	}
+}
+
+// TestQQuitsOnlyWithEmptyFilter: q quits while the filter is empty and is
+// text once something is typed, as in every tool of the family.
+func TestQQuitsOnlyWithEmptyFilter(t *testing.T) {
+	m := copyModel(t, t.TempDir())
+	m.ti = newFilterInput("asgoto", "Search…")
+	q := tea.KeyPressMsg{Code: 'q', Text: "q"}
+	if _, cmd := m.Update(q); !isQuit(cmd) {
+		t.Error("q with an empty filter should quit")
+	}
+	res, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	res, cmd := res.(model).Update(q)
+	if got := res.(model); got.ti.Value() != "xq" || isQuit(cmd) {
+		t.Errorf("filter = %q, quit = %v, want q typed as text", got.ti.Value(), isQuit(cmd))
+	}
+}
+
+// TestPanesKeyKeepsTheCursorAndPersists: ctrl+a hides and lists the plain
+// panes with the cursor kept on its node (its index changes), a hidden pane
+// hands the cursor to its parent, and the choice is saved as the "panes"
+// setting by the command the key returns.
+func TestPanesKeyKeepsTheCursorAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", dir)
+	m := copyModel(t, t.TempDir())
+	m.ti = newFilterInput("asgoto", "Search…")
+	toggle := func() {
+		t.Helper()
+		res, cmd := m.Update(tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+		m = res.(model)
+		if cmd == nil {
+			t.Fatal("ctrl+a returned no command: nothing would be saved")
+		}
+		if msg := cmd(); msg != nil {
+			t.Errorf("the save command returned %v", msg)
+		}
+		if m.ti.Value() != "" {
+			t.Errorf("ctrl+a leaked into the filter: %q", m.ti.Value())
+		}
+	}
+	m.cursor = len(m.rows) - 1 // the space under the pane
+	at := m.rows[m.cursor].n
+	toggle()
+	if m.showPanes || len(m.rows) != 3 || m.rows[m.cursor].n != at || m.cursor != 2 {
+		t.Errorf("hidden: showPanes=%v, %d rows, cursor %d on %q, want 3 rows and row 2 on %q", m.showPanes, len(m.rows), m.cursor, m.rows[m.cursor].n.label, at.label)
+	}
+	if got := loadSetting(stateDir(), "panes"); got != "hidden" {
+		t.Errorf("panes setting = %q, want hidden", got)
+	}
+	toggle()
+	if !m.showPanes || len(m.rows) != 4 || m.rows[m.cursor].n != at || m.cursor != 3 {
+		t.Errorf("shown: showPanes=%v, %d rows, cursor %d on %q, want 4 rows and row 3 on %q", m.showPanes, len(m.rows), m.cursor, m.rows[m.cursor].n.label, at.label)
+	}
+	if got := loadSetting(stateDir(), "panes"); got != "shown" {
+		t.Errorf("panes setting = %q, want shown", got)
+	}
+	if stateDir() != dir {
+		t.Errorf("the setting went to %q, want the test's state dir", stateDir())
+	}
+	m.cursor = 2 // the pane itself
+	if m.rows[m.cursor].n.kind != "pane" {
+		t.Fatalf("row 2 is a %s, want the pane", m.rows[m.cursor].n.kind)
+	}
+	toggle()
+	if got := m.rows[m.cursor].n; got.kind != "worktree" || got.label != "fix" {
+		t.Errorf("hiding the pane under the cursor left it on %s %q, want its worktree", got.kind, got.label)
+	}
+}
+
+// TestEnterFocusesTheRow: enter quits with what main runs afterwards, the
+// pane to focus for a pane and the workspace to focus for a repo or a
+// worktree, never both.
+func TestEnterFocusesTheRow(t *testing.T) {
+	m := copyModel(t, t.TempDir())
+	cases := []struct {
+		kind, pane string
+		action     []string
+	}{
+		{"repo", "", []string{"workspace", "focus", "w1"}},
+		{"worktree", "", []string{"workspace", "focus", "w2"}},
+		{"pane", "w2:p1", nil},
+		{"repo", "", []string{"workspace", "focus", "w3"}},
+	}
+	for i, c := range cases {
+		m.cursor = i
+		if got := m.rows[i].n.kind; got != c.kind {
+			t.Fatalf("row %d is a %s, want a %s", i, got, c.kind)
+		}
+		res, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		got := res.(model)
+		if !isQuit(cmd) {
+			t.Errorf("row %d (%s): enter did not quit", i, c.kind)
+		}
+		if got.focusPane != c.pane || strings.Join(got.action, " ") != strings.Join(c.action, " ") {
+			t.Errorf("row %d (%s): pane %q action %v, want %q %v", i, c.kind, got.focusPane, got.action, c.pane, c.action)
+		}
+	}
+}
+
 // TestMain sandboxes the state dir: tests must never touch the real one, even
 // one that forgets to set it.
 func TestMain(m *testing.M) {
@@ -1056,4 +1348,23 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// A label that does not fit is cut with an ellipsis, on the selected row too,
+// and a match past the cut is dropped instead of pointing outside the text.
+func TestRowLineCutsALongLabel(t *testing.T) {
+	n := &node{kind: "worktree", label: "feature/a-very-long-branch-name-that-goes-on-and-on"}
+	r := rowItem{n: n, depth: 1, match: true, idx: []int{0, 1, 45, 46}}
+	for _, selected := range []bool{false, true} {
+		line := ansi.Strip(rowLine(r, selected, 30))
+		if w := ansi.StringWidth(line); w > 30 || !strings.Contains(line, "…") || !strings.Contains(line, "feature/a-very") {
+			t.Errorf("selected=%v: %d cells: %q", selected, w, line)
+		}
+	}
+	if label, idx := fitLabel(n.label, r.idx, 12); label != "feature/a-v…" || len(idx) != 2 {
+		t.Errorf("fitLabel = %q %v", label, idx)
+	}
+	if label, idx := fitLabel("short", []int{1}, 12); label != "short" || len(idx) != 1 {
+		t.Errorf("a label that fits is left alone: %q %v", label, idx)
+	}
 }

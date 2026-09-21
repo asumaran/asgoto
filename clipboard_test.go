@@ -22,11 +22,11 @@ func TestCopyCmdFeedsTheToolsClipboard(t *testing.T) {
 	if msg := copyCmd("astool", "the path", "/a/very/long/path")(); msg != flashMsg("copied the path") {
 		t.Errorf("a label replaces the text in the confirmation: %q", msg)
 	}
-	if msg := copyCmd("astool", "", "")(); msg != flashMsg("nothing to copy") {
+	if msg := copyCmd("astool", "", "")(); msg != flashErrMsg("nothing to copy") {
 		t.Errorf("empty text: %q", msg)
 	}
 	t.Setenv("ASTOOL_CLIPBOARD", filepath.Join(t.TempDir(), "missing"))
-	if msg, ok := copyCmd("astool", "", "x")().(flashMsg); !ok || len(msg) < 12 || msg[:12] != "copy failed:" {
-		t.Errorf("a failing command is reported: %q", msg)
+	if msg, ok := copyCmd("astool", "", "x")().(flashErrMsg); !ok || len(msg) < 12 || msg[:12] != "copy failed:" {
+		t.Errorf("a failing command is reported as a failure: %q", msg)
 	}
 }

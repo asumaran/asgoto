@@ -11,7 +11,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -214,9 +213,7 @@ func prCacheFile() string {
 
 func loadPRCache() prCache {
 	var c prCache
-	if data, err := os.ReadFile(prCacheFile()); err == nil {
-		_ = json.Unmarshal(data, &c)
-	}
+	readJSONFile(prCacheFile(), &c)
 	if c.Repos == nil {
 		c.Repos = map[string]repoPRs{}
 	}
@@ -235,9 +232,7 @@ func savePRCacheCmd(c prCache) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		path := prCacheFile()
-		_ = os.MkdirAll(filepath.Dir(path), 0o755)
-		_ = os.WriteFile(path, data, 0o644)
+		writeFileAtomic(prCacheFile(), data)
 		return nil
 	}
 }
@@ -271,10 +266,10 @@ func fetchRepoPRsCmd(slug string, branches []string, prev map[string]prRef) tea.
 			wg.Add(1)
 			go func(i int, branch string) {
 				defer wg.Done()
-				out, err := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", slug,
+				out, err := ghRun(ctx, "pr", "list", "--repo", slug,
 					"--head", branch, "--state", "all",
 					"--json", "number,headRefName,state,isDraft,title",
-					"--limit", "5").Output()
+					"--limit", "5")
 				if err != nil {
 					results[i] = result{err: true}
 					return
@@ -864,43 +859,13 @@ func countsText(n *node) string {
 	return strings.Join(parts, " ")
 }
 
-// herdrTimeout bounds one read from the herdr CLI: a server that does not
-// answer is an error to report, never a hang (the popup and -dump alike).
-const herdrTimeout = 5 * time.Second
-
+// loadJSON reads the answer of a herdr command into out (herdrcli.go).
 func loadJSON(args []string, out any) error {
-	ctx, cancel := context.WithTimeout(context.Background(), herdrTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, herdrBin(), args...)
-	cmd.WaitDelay = time.Second
-	data, err := cmd.Output()
+	data, err := herdrRun(args...)
 	if err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("no answer from herdr after %s", herdrTimeout)
-		}
-		var stderr []byte
-		if ee, ok := err.(*exec.ExitError); ok {
-			stderr = ee.Stderr
-		}
-		return herdrError(err, data, stderr)
+		return err
 	}
 	return json.Unmarshal(data, out)
-}
-
-// herdrError is err said the way herdr said it: the CLI reports a failure as
-// a JSON error object (on either stream), whose message beats "exit status 1".
-func herdrError(err error, outputs ...[]byte) error {
-	for _, o := range outputs {
-		var resp struct {
-			Error *struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if json.Unmarshal(bytes.TrimSpace(o), &resp) == nil && resp.Error != nil && resp.Error.Message != "" {
-			return fmt.Errorf("%s", resp.Error.Message)
-		}
-	}
-	return err
 }
 
 // gitTopLevel walks up from path to the nearest directory holding a .git
@@ -1238,7 +1203,7 @@ func currentWorkspaceNode(wss []wsInfo, nodes []*node) *node {
 	return nil
 }
 
-// flatten returns every node in tree order plus parallel slices of lowercased
+// flatten returns every node in tree order plus parallel slices of the
 // labels and extra match text (branch and worktree folder), fed to the fuzzy
 // matcher in one shot per keystroke. A node's extra entry is "" when it adds
 // nothing over the label (no branch/folder, or identical), so the matcher
@@ -1250,11 +1215,10 @@ func flatten(roots []*node) ([]*node, []string, []string) {
 	var walk func(n *node)
 	walk = func(n *node) {
 		nodes = append(nodes, n)
-		label := strings.ToLower(n.label)
-		labels = append(labels, label)
+		labels = append(labels, n.label)
 		var extra []string
 		for _, s := range []string{n.branch, n.folder} {
-			if s = strings.ToLower(s); s != "" && s != label {
+			if s != "" && !strings.EqualFold(s, n.label) {
 				extra = append(extra, s)
 			}
 		}
@@ -1326,10 +1290,10 @@ type rowItem struct {
 type model struct {
 	width, height int // terminal size, from the last WindowSizeMsg
 	roots         []*node
-	allNodes      []*node            // flattened, parallel to lowerLabels/lowerBranches/lowerMetas
-	lowerLabels   []string           // lowercased labels for the fuzzy matcher
-	lowerBranches []string           // lowercased branch + worktree folder ("" when same as label); extra match text
-	lowerMetas    []string           // ticket + PR number per node ("" when none); extra match text
+	allNodes      []*node            // flattened, parallel to labels/branches/metas
+	labels        []string           // the labels as shown, for the matcher (it folds case; its offsets are bytes into them)
+	branches      []string           // branch + worktree folder ("" when same as label); extra match text
+	metas         []string           // ticket + PR number per node ("" when none); extra match text
 	slugNodes     map[string][]*node // nodes with a branch, grouped by GitHub slug
 	prPending     int                // in-flight gh fetches; cache is saved when it reaches 0
 	cache         prCache            // loaded at startup, merged as repoPRsMsg arrive
@@ -1589,9 +1553,9 @@ const sortLabelW = len("sort: priority")
 // "#1234", or a ticket that only came from a PR title. Rebuilt whenever PR
 // annotations change (they arrive async from gh).
 func (m *model) refreshMetas() {
-	m.lowerMetas = m.lowerMetas[:0]
+	m.metas = m.metas[:0]
 	for _, n := range m.allNodes {
-		meta := strings.ToLower(n.ticket)
+		meta := n.ticket
 		if n.pr != nil {
 			if meta != "" {
 				meta += " "
@@ -1604,7 +1568,7 @@ func (m *model) refreshMetas() {
 			}
 			meta += portsText(n)
 		}
-		m.lowerMetas = append(m.lowerMetas, meta)
+		m.metas = append(m.metas, meta)
 	}
 }
 
@@ -1616,7 +1580,7 @@ func (m *model) persisted() persisted {
 // parallel to the tree order (allNodes and the three match corpora).
 func (m *model) resort() {
 	sortTree(m.roots, m.prioritySort)
-	m.allNodes, m.lowerLabels, m.lowerBranches = flatten(m.roots)
+	m.allNodes, m.labels, m.branches = flatten(m.roots)
 	m.refreshMetas()
 }
 
@@ -1640,9 +1604,9 @@ func (m *model) applyFilter() {
 	// showing PR #1234. Only label matches are highlighted: the other offsets
 	// point into text the row does not show.
 	var perTerm []map[int]fieldsHit
-	for _, tok := range strings.Fields(strings.ToLower(m.ti.Value())) {
+	for _, tok := range strings.Fields(m.ti.Value()) {
 		if len(queryTerms(tok, true)) > 0 {
-			perTerm = append(perTerm, findFields(tok, m.lowerLabels, m.lowerBranches, m.lowerMetas))
+			perTerm = append(perTerm, findFields(tok, m.labels, m.branches, m.metas))
 		}
 	}
 	filtering := len(perTerm) > 0
@@ -1787,32 +1751,51 @@ func rowLine(r rowItem, selected bool, width int) string {
 	// The status dot sits in its own gutter to the left, outside the selection
 	// highlight.
 	dot := statusDot(r.n.status) + " "
+	// A label longer than the row is cut with an ellipsis, as every list of
+	// the family does, instead of being chopped by the frame.
+	label, idx := fitLabel(r.n.label, r.idx, width-2-rightMargin-lipgloss.Width("  "+indent+prPrefixPlain(r.n)))
 	if selected {
 		// Plain text inside the highlight, except the filter's matches, which
 		// stay marked where the cursor is. Every piece carries the background
 		// itself: nested ANSI on a background renders inconsistently across
 		// terminals. Constant 2-col gutter keeps content aligned whether or not
 		// the row is selected.
-		var idx []int
-		if r.match {
-			idx = r.idx
+		if !r.match {
+			idx = nil
 		}
 		left := "▌ " + indent + prPrefixPlain(r.n)
-		leftW := lipgloss.Width(left + r.n.label)
+		leftW := lipgloss.Width(left + label)
 		right := rightColumn(rightSegs(r.n), width-2-rightMargin-leftW, false)
 		// Pad to the full row width so the highlight spans the line, not just
 		// the text (the gutter takes 2 columns).
 		if pad := width - 2 - leftW - lipgloss.Width(right); pad > 0 {
 			right += strings.Repeat(" ", pad)
 		}
-		return dot + stSel.Render(left) + highlight(r.n.label, idx, stSel) + stSel.Render(right)
+		return dot + stSel.Render(left) + highlight(label, idx, stSel) + stSel.Render(right)
 	}
-	name := r.n.label
+	name := label
 	if r.match {
-		name = highlight(r.n.label, r.idx, lipgloss.NewStyle())
+		name = highlight(label, idx, lipgloss.NewStyle())
 	}
 	left := "  " + indent + prPrefix(r.n) + name
 	return dot + left + rightColumn(rightSegs(r.n), width-2-rightMargin-lipgloss.Width(left), true)
+}
+
+// fitLabel cuts label to room cells and keeps the match offsets (bytes into
+// the label) that are still in what is left.
+func fitLabel(label string, idx []int, room int) (string, []int) {
+	if room < 1 || lipgloss.Width(label) <= room {
+		return label, idx
+	}
+	cut := truncate(label, room)
+	kept := len(strings.TrimSuffix(cut, "…"))
+	var in []int
+	for _, i := range idx {
+		if i < kept {
+			in = append(in, i)
+		}
+	}
+	return cut, in
 }
 
 // rightMargin keeps the right-aligned column off the popup's edge.
@@ -1956,6 +1939,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case flashMsg:
 		return m, m.flash.set(string(msg))
+
+	case flashErrMsg:
+		return m, m.flash.fail(string(msg))
 
 	case clearFlashMsg:
 		m.flash.clear(msg)
@@ -2279,7 +2265,7 @@ func main() {
 	state := loadState()
 	roots := buildTree(ws.Result.Workspaces, pn.Result.Panes, seqs)
 	sortTree(roots, state.PrioritySort)
-	allNodes, lowerLabels, lowerBranches := flatten(roots)
+	allNodes, labels, branches := flatten(roots)
 
 	// Annotate PR info from the disk cache (instant), then schedule a gh
 	// refresh per repo whose cache entry is missing or no longer fresh. The
@@ -2328,7 +2314,7 @@ func main() {
 	// rows); their ports arrive async (lsof is the slow part) and only fill the
 	// right column.
 	annotateProcs(roots, fetchProcInfos(paneIDs))
-	allNodes, lowerLabels, lowerBranches = flatten(roots)
+	allNodes, labels, branches = flatten(roots)
 	if procs := procRows(allNodes); len(procs) > 0 {
 		if dump {
 			annotatePorts(procs, fetchPorts(fetchPortsCmdPids(procs)))
@@ -2351,22 +2337,22 @@ func main() {
 	ti := newFilterInput("asgoto", "Search repos, worktrees and panes…")
 
 	m := model{
-		roots:         roots,
-		allNodes:      allNodes,
-		lowerLabels:   lowerLabels,
-		lowerBranches: lowerBranches,
-		slugNodes:     slugNodes,
-		prPending:     prPending,
-		cache:         cache,
-		initCmds:      initCmds,
-		showPanes:     state.ShowPanes,
-		prioritySort:  state.PrioritySort,
-		ti:            ti,
-		width:         82, // until the first WindowSizeMsg: the frame around an 80x20 tree
-		height:        26,
-		vp:            viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
-		help:          help.New(),
-		keys:          defaultKeys(),
+		roots:        roots,
+		allNodes:     allNodes,
+		labels:       labels,
+		branches:     branches,
+		slugNodes:    slugNodes,
+		prPending:    prPending,
+		cache:        cache,
+		initCmds:     initCmds,
+		showPanes:    state.ShowPanes,
+		prioritySort: state.PrioritySort,
+		ti:           ti,
+		width:        82, // until the first WindowSizeMsg: the frame around an 80x20 tree
+		height:       26,
+		vp:           viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
+		help:         help.New(),
+		keys:         defaultKeys(),
 	}
 	m.resort()
 	if dump {
@@ -2396,12 +2382,12 @@ func runAction(pane string, action []string) error {
 	if pane != "" && focusPane(pane) != nil {
 		// Standalone run (no socket env) or an older server: the CLI's
 		// agent focus still lands on agent panes.
-		if err := exec.Command(herdrBin(), "agent", "focus", pane).Run(); err != nil {
+		if err := herdrDo("agent", "focus", pane); err != nil {
 			return fmt.Errorf("focus pane %s: %w", pane, err)
 		}
 	}
 	if action != nil {
-		if err := exec.Command(herdrBin(), action...).Run(); err != nil {
+		if err := herdrDo(action...); err != nil {
 			return fmt.Errorf("herdr %s: %w", strings.Join(action, " "), err)
 		}
 	}

@@ -28,3 +28,19 @@ func TestFlashIsClearedByItsOwnTimerOnly(t *testing.T) {
 		t.Errorf("its own timer clears it: %q", f.view(40))
 	}
 }
+
+// A failure shows in the error color, and a confirmation after it is a
+// confirmation again.
+func TestFlashFailure(t *testing.T) {
+	var f flash
+	if f.fail("nothing to copy") == nil || !f.bad || f.text != "nothing to copy" {
+		t.Fatalf("fail: %+v", f)
+	}
+	if got := f.view(40); got != truncate(stError.Render("nothing to copy"), 40) {
+		t.Errorf("a failure is drawn as an error: %q", got)
+	}
+	f.set("copied abc")
+	if f.bad || f.view(40) != truncate(stFlash.Render("copied abc"), 40) {
+		t.Errorf("a confirmation after a failure: %+v", f)
+	}
+}

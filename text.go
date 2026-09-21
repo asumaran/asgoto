@@ -52,3 +52,13 @@ func plural(n int, noun string) string {
 	}
 	return strconv.Itoa(n) + " " + noun + "s"
 }
+
+// errorBlock is an error for a preview, in the error color: every line of it
+// (git says what went wrong in several) cut to width, none of them wrapped.
+func errorBlock(msg string, width int) string {
+	lines := strings.Split(strings.TrimRight(msg, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = stError.Render(truncate(l, max(0, width)))
+	}
+	return strings.Join(lines, "\n")
+}

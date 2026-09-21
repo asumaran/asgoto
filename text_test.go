@@ -43,3 +43,13 @@ func TestPlural(t *testing.T) {
 		t.Errorf("plural = %q", got)
 	}
 }
+
+func TestErrorBlockCutsEveryLine(t *testing.T) {
+	got := ansi.Strip(errorBlock("fatal: bad revision 'x'\nhint: a very long second line\n", 12))
+	if got != "fatal: bad …\nhint: a ver…" {
+		t.Errorf("errorBlock = %q", got)
+	}
+	if got := errorBlock("boom", 40); got != stError.Render("boom") {
+		t.Errorf("a short error is drawn whole, in the error color: %q", got)
+	}
+}
