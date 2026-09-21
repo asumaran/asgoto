@@ -1,3 +1,8 @@
+## v0.21.2 (2026-09-20)
+
+* docs(readme): follow the family's sections (a15089c)
+* refactor(list): keep the cursor in view with scrollTo (110d2c8)
+
 ## v0.21.1 (2026-09-20)
 
 * refactor(state): keep one file per setting (d788f8f)
