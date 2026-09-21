@@ -39,7 +39,7 @@ touching the tree building, the filter, the right column or the caches in
   ticket and the PR number are matched (typing "1234" finds the row showing
   #1234). Matches keep ancestors visible and the cursor jumps to the best
   one (`selectBestMatch`). Digits are plain search text; the
-  old "1-9 jumps to a numbered repo" mode was removed on purpose — do not
+  old "1-9 jumps to a numbered repo" mode was removed on purpose: do not
   reintroduce it.
 - Process rows: a pane whose foreground process group leader is not the
   shell (`pane process-info`, argv compressed by `shortCmd`) is relabelled
@@ -66,12 +66,9 @@ touching the tree building, the filter, the right column or the caches in
   rows the folder, only when it is not the branch's `/` -> `-` slug), then
   the ahead/behind hint (`deltaText`, "↑n↓n", empty when in sync), then the
   working-tree counters (`countsText`/`countSegs`, "+n !n ?n"
-  staged/unstaged/untracked, each hidden at zero) — the same order, symbols
-  and 256-color palette as the zsh prompt's `git_prompt_segment` and the
-  Claude Code statusline (dotfiles-bash: modules/zsh/zshrc.template,
-  modules/claude-code/statusline-command.sh): delta pink bold (212), staged
-  green (84), unstaged yellow (228), untracked dim (245); keep the three in
-  sync. Every hint is its own fixed-width column, sized by the row with the
+  staged/unstaged/untracked, each hidden at zero), the order and symbols of
+  a git shell prompt, in a fixed 256-color palette: delta pink bold (212),
+  staged green (84), unstaged yellow (228), untracked dim (245). Every hint is its own fixed-width column, sized by the row with the
   widest value and absent when no row has it (`layoutHints`, `node.deltaW`
   / `stagedW` / `unstagW` / `untrkW`; rows with a shorter/absent value pad
   the slot, left-aligned so the ↑/+/!/? symbols stack vertically), so the

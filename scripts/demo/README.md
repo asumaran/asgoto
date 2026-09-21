@@ -12,7 +12,7 @@ asdemo doctor            # check the toolchain first
 syncing the manifest version, so the popup shows the released version) and
 commits the refreshed GIF with the release; `--no-demo` skips it.
 
-- `scenario.sh` — what the demo session looks like: the isolated herdr
+- `scenario.sh`: what the demo session looks like: the isolated herdr
   session (`asgotodemo`), the personal repos/worktrees it is populated with,
   the bottom splits, a dev server (`npm run dev` in the shopnest worktree
   split, so the popup lists it as a process row with its port), the
@@ -21,7 +21,7 @@ commits the refreshed GIF with the release; `--no-demo` skips it.
   plus `demo_build` (stamps `./asgoto` with the manifest version so the popup
   shows the release prompt, no `(dev)` marker) and `demo_teardown` (restores
   the dev build).
-- `keys.json` — the keystrokes replayed once the client is attached:
+- `keys.json`: the keystrokes replayed once the client is attached:
   `prefix+f` -> popup -> type `price` -> enter -> `prefix+f` -> type `asdev`
   -> enter. The kit appends the detach.
 

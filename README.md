@@ -84,7 +84,9 @@ row name, the branch, the worktree folder, the Jira ticket, the PR number and
 the listening ports, so "1234" finds the row showing #1234 and "3000" finds
 whoever holds that port. Matching rows keep their ancestors visible and the
 cursor jumps to the best match. On ties, repos and worktrees outrank panes,
-so typing "h" lands on herdr.
+so typing "h" lands on herdr. Pasting into the filter (a terminal paste or
+`ctrl+v`) filters like typing does. A query of spaces only, or a bare `~` or `'`, is
+not a query yet: the tree stays as it is and the cursor does not move.
 
 Digits are plain search text. There is no "press 1-9 to jump to a repo"
 shortcut because it would conflict with searching by PR or ticket number.
@@ -98,8 +100,9 @@ The panel (`f1`) switches to priority order. It is herdr's Agents panel
 `agent_panel_sort = "priority"` applied to every level of the tree: blocked
 first, then done, working, idle, and rows without an agent. Within a status
 the most recent state change goes first. A repo's own panes stay above its
-worktrees. The frame's top border shows the rows listed out of the total and which
-order is active (`sort: spaces` or `sort: priority`).
+worktrees. The edge under the tree shows the rows listed out of the total, and
+the frame's top border which order is active (`sort: spaces` or
+`sort: priority`).
 
 ### Selecting
 
@@ -107,6 +110,8 @@ The cursor starts on the space asgoto was opened from, so `enter` on an empty
 query changes nothing. `enter` on a repo or worktree switches to that space
 without changing which pane is focused inside it. You land where you left it,
 and the agent pane is never autofocused. `enter` on a pane focuses that pane.
+With nothing under the cursor (a query that matches no row) `enter` does
+nothing and the popup stays.
 
 `ctrl+y` copies the directory of the row under the cursor instead of going
 there: the checkout of a repo or worktree, the working directory of a pane.
@@ -152,6 +157,7 @@ go build -o asgoto .             # local build inside the repo
 ./asgoto -version                # print the embedded version
 go vet ./... && go test ./...
 scripts/pty-check.py ./asgoto   # end-to-end TUI check on a pty (python3 + pyte)
+herdr plugin link "$PWD"         # register the working copy (no build step)
 ```
 
 `-dump` builds the tree the way the popup does (same herdr calls, same order)
@@ -176,6 +182,14 @@ from the checkout registers it. `plugin link` does **not** run build
 commands, so build the binary yourself first with `go build -o asgoto .`. Don't
 run `fetch-binary.sh` for this: it would fetch the released build instead of
 your changes.
+
+Runtime state (the settings `panes` and `order`, and `prcache.json`) lives in
+`HERDR_PLUGIN_STATE_DIR`; standalone runs use the same directory
+(`~/.local/state/herdr/plugins/asumaran.asgoto/`).
+
+`ASGOTO_CLIPBOARD` replaces the clipboard command (the tests and the pty check
+point it at a logging stub). `ASGOTO_POPUP_WIDTH` / `ASGOTO_POPUP_HEIGHT`
+override the popup size from the manifest.
 
 ## Demo recording
 
