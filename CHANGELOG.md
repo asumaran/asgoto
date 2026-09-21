@@ -1,3 +1,15 @@
+## v0.22.0 (2026-09-21)
+
+* docs: describe the new shared files and flashes (3a33d40)
+* refactor: share the herdr, gh and cache helpers (311696b)
+* docs(readme): the counter counts matches (14a87f6)
+* fix(list): count matches, report a failed action (214fd1f)
+* docs: match the docs to the shared helpers (c7f42ec)
+* fix(ui): filter on paste, keep enter off no row (5554dd0)
+* docs(claude): follow the family's order and names (fc9c0da)
+* style(ui): color a merged PR with ANSI magenta (6ba175c)
+* feat(list): say why the tree is empty (dd2c8d5)
+
 ## v0.21.2 (2026-09-20)
 
 * docs(readme): follow the family's sections (a15089c)
