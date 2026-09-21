@@ -38,7 +38,9 @@ touching the tree building, the filter, the right column or the caches in
   repo/worktree names outrank panes. Besides the label, the branch, the Jira
   ticket and the PR number are matched (typing "1234" finds the row showing
   #1234). Matches keep ancestors visible and the cursor jumps to the best
-  one (`selectBestMatch`). Digits are plain search text; the
+  one (`selectBestMatch`). The corpora (`model.labels`, `branches`, `metas`)
+  hold the text as shown and the query is matched as typed: the matcher folds
+  case itself, and its offsets are bytes into the label the row draws. Digits are plain search text; the
   old "1-9 jumps to a numbered repo" mode was removed on purpose: do not
   reintroduce it.
 - Process rows: a pane whose foreground process group leader is not the
@@ -59,7 +61,9 @@ touching the tree building, the filter, the right column or the caches in
   herdr's workspace label) when the branch is unknown/detached. The folder is
   the slug of the branch the worktree was created for and goes stale after a
   checkout, which is why it is not the label; it stays in the search corpus
-  (`flatten` joins branch + folder as the extra match text).
+  (`flatten` joins branch + folder as the extra match text). A label longer
+  than the row is cut with an ellipsis (`fitLabel`, which also drops the match
+  offsets past the cut).
 - Right column (`rightSegs`, styled segments; `rightText` is the plain join
   for -dump/tests): ports on process rows. Repo/worktree rows, in the shell
   prompt's order: the name (the branch on repo rows, always; on worktree
@@ -88,7 +92,9 @@ touching the tree building, the filter, the right column or the caches in
   removes);
   `deltaMsg` rewrites `Hints` with only the checkouts still listed and
   saves. `savePRCacheCmd` marshals synchronously so the async write never
-  races a later mutation of the maps. A `rightMargin` of 1 column keeps the
+  races a later mutation of the maps, and writes through a temporary file and
+  a rename (`writeFileAtomic`, `jsonfile.go`), so a popup closed mid-write
+  never leaves half a file. A `rightMargin` of 1 column keeps the
   column off the popup edge. The breadcrumb line under the prompt was
   removed as redundant with the tree.
 - A constant 2-col gutter (indicator + space) sits left of every row, outside
@@ -121,7 +127,8 @@ touching the tree building, the filter, the right column or the caches in
   label, then PR title as fallback) and the branch's PR number colored by
   state (open green, draft dim, merged purple, closed red). Columns align per
   sibling group; rows with neither ticket nor PR get no prefix. PR data comes
-  from one async `gh pr list` per unique GitHub repo, fired after the TUI is
+  from one async command per unique GitHub repo (a `gh pr list --head
+  <branch>` per local branch, in parallel, through `ghRun`), fired after the TUI is
   on screen, and cached in `prcache.json` next to the settings
   (stale-while-revalidate; entries fresher than 60s skip the refresh).
   Missing `gh` or non-GitHub remotes degrade silently to no PR info.

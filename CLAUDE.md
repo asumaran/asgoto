@@ -41,7 +41,8 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   a bare `~` or `'` do not, so they never filter, rank or move the cursor. The
   same file in every tool of the family.
 - `text.go`: `truncate`, `padRight`, `padLeft`: fitting text, styled or not,
-  into cells. The same file in every tool of the family.
+  into cells. `errorBlock` is an error for a preview: every line of it cut to
+  the width, in the error color. The same file in every tool of the family.
 - `statedir.go`: `stateDirFor`: the state dir herdr injects
   (`HERDR_PLUGIN_STATE_DIR`) or, when the tool runs on its own, the same
   directory worked out
@@ -101,6 +102,11 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
 - `herdrbin.go`: `herdrBin`: where the herdr executable is (`HERDR_BIN_PATH`,
   which the server hands to plugin commands, else `herdr` on `PATH`). The same
   file in every tool of the family that talks to herdr.
+- `herdrcli.go`: `herdrRun`, `herdrAct`, `herdrDo`, `herdrError`: running the herdr CLI. A
+  read (`herdrRun`) gets 5 seconds and a command that changes something
+  (`herdrAct`, `herdrDo`) 30, so a server that does not answer is an error, never a hang,
+  and a failure is said the way herdr said it (the message of its JSON error
+  object). The same file in every tool of the family that runs herdr.
 - `gitremote.go`: `resolveGitDir`, `originURL`, `githubSlug`,
   `githubSlugFromURL`: what a checkout says about its remote, read straight
   from the filesystem with no subprocess, so scanning dozens of repos at
@@ -109,11 +115,23 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
 - `ticket.go`: `ticketFrom`: the ticket key (`KEY-123`, uppercased) found in a
   branch name, a title or a folder name. The same file in every tool of the
   family that needs it.
-- `flash.go`: `flash`, `flashMsg`, `clearFlashMsg`: a confirmation that takes
-  the help line for a moment. The same file in every tool of the family.
+- `ghrun.go`: `ghRun`: running the GitHub CLI. A failure is said the way gh
+  said it (the first line of its stderr), and a missing gh reads `gh not found
+  (install the GitHub CLI)`. The tests replace it. The same file in every tool
+  of the family that runs gh.
+- `jsonfile.go`: `readJSONFile`, `writeJSONFile`, `writeFileAtomic`: a JSON
+  cache in the state dir. A file that is missing or does not parse reads as
+  nothing, and a write goes through a temporary file and a rename, so a popup
+  closed mid-write, or two of them writing at once, never leave half a file
+  for the next run. The same file in every tool of the family that keeps one.
+- `flash.go`: `flash`, `flashMsg`, `flashErrMsg`, `clearFlashMsg`: a word that
+  takes the help line for a moment: a confirmation in green (`flash.set`), or
+  a key that could do nothing (`nothing to copy`) in the error color
+  (`flash.fail`). The same file in every tool of the family.
 - `clipboard.go`: `copyCmd`: feeds a text to the system clipboard and reports
-  it with a `flashMsg`; `ASGOTO_CLIPBOARD` replaces the command. The same file
-  in every tool of the family.
+  it with a `flashMsg`, or with a `flashErrMsg` when there is nothing to copy
+  or the copy fails; `ASGOTO_CLIPBOARD` replaces the command. The same file in
+  every tool of the family.
 - `herdr-plugin.toml`: the herdr plugin manifest (id `asumaran.asgoto`): a
   `[[build]]` (runs `scripts/fetch-binary.sh` on install), the `picker` popup
   pane, and the `open` action that opens it (keybind entry point).
@@ -226,7 +244,9 @@ Non-negotiables that are not obvious from the code:
   closes it before it does anything else. `?` is not a help key: the filter
   has the focus, so it is text. Moving, scrolling and resizing are listed in
   the panel only, so the help line stays short enough for a narrow popup. A
-  message (error, notice) takes the help line's place.
+  message takes the help line's place (`footLine`): a flash for a moment (a
+  confirmation in green, a key that could do nothing in the error color),
+  else an error or a notice in the error color.
   This tool's options are the order and the panes: `options()` lists them as things stand and
   `setOption` is the one place that changes a setting, for the panel and for
   the keys that kept a shortcut. A setting that is chosen once has no key of
@@ -235,7 +255,8 @@ Non-negotiables that are not obvious from the code:
   (`nodeDir`: the checkout of a repo or worktree, a pane's `cwd`, and the
   first pane's `cwd` for a space that is no git checkout) with `copyCmd`
   (`clipboard.go`). The clipboard gets the absolute path and the help line
-  flashes `copied <path with ~>` or `nothing to copy` (`flash.go`, shown by
+  flashes `copied <path with ~>` in green, or `nothing to copy` (and
+  `copy failed: ...`) in the error color (`flash.go`, shown by
   the shared `footLine`, which has no notice to show here); both files are the same in
   every tool of the family. The key is listed in the panel only.
   `ASGOTO_CLIPBOARD` replaces the clipboard command,
@@ -247,9 +268,10 @@ Non-negotiables that are not obvious from the code:
   every node with `dumpLine`. `-dump -query x` goes through `queryDump`: it
   sets the input, calls `applyFilter` and `selectBestMatch` on that model and
   prints `m.rows`, so there is no second filter to keep in sync. It follows
-  the persisted panes and order settings. `loadJSON` bounds each herdr read
-  (`herdrTimeout`) and reports herdr's own JSON error message, so an
-  unreachable server is an error and exit 1, never a hang. Read-only.
+  the persisted panes and order settings. `loadJSON` reads through `herdrRun`
+  (`herdrcli.go`), which bounds each herdr read (`herdrTimeout`) and reports
+  herdr's own JSON error message, so an unreachable server is an error and
+  exit 1, never a hang. Read-only.
 - **Filter matches** look the same in every tool of the family and come from
   one place, `highlight.go` (the same file in each repo; it also owns `stSel`
   and `stMatch`): a match is the match color plus an underline on top of the
@@ -283,6 +305,11 @@ Non-negotiables that are not obvious from the code:
   do not reintroduce it.
 - Worktree rows are labelled by the checked-out branch, never by the folder
   (the folder is a stale slug after a checkout). The folder stays searchable.
+- A label longer than the row is cut with an ellipsis (`fitLabel`), as every
+  list of the family does, and the match offsets past the cut are dropped.
+  The match corpora (`model.labels`, `branches`, `metas`) hold the text as
+  shown and the query is matched as typed: the matcher folds case itself, and
+  its offsets are bytes into the label the row draws.
 - The right column reads like a git shell prompt: the branch, `↑`/`↓`, then
   `+n` staged, `!n` unstaged and `?n` untracked, in that order and in a fixed
   256-color palette (`docs/DESIGN.md`). The order, the symbols and the colors

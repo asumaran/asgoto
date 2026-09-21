@@ -60,7 +60,8 @@ checked out in them, because the folder is only the slug of the branch the
 worktree was created for and goes stale after a `git checkout`. When the
 folder no longer matches the branch it shows dimmed at the right, so a
 worktree created as `foo` and now on `as-foo-bar-test` reads
-`as-foo-bar-test  foo`. A detached HEAD falls back to the folder.
+`as-foo-bar-test  foo`. A detached HEAD falls back to the folder. A name
+longer than the row is cut with an ellipsis.
 
 Around each name:
 
@@ -117,8 +118,8 @@ nothing and the popup stays.
 `ctrl+y` copies the directory of the row under the cursor instead of going
 there: the checkout of a repo or worktree, the working directory of a pane.
 The clipboard gets the absolute path and the help line says `copied ~/...`
-for a moment, or `nothing to copy` when herdr reported no directory for the
-row. `ASGOTO_CLIPBOARD` replaces the clipboard command the path is fed to
+for a moment, or `nothing to copy`, in the error color, when herdr reported
+no directory for the row. `ASGOTO_CLIPBOARD` replaces the clipboard command the path is fed to
 (`pbcopy` on macOS, else `wl-copy`, `xclip` or `xsel`).
 
 ### Keys
