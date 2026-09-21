@@ -100,7 +100,8 @@ The panel (`f1`) switches to priority order. It is herdr's Agents panel
 `agent_panel_sort = "priority"` applied to every level of the tree: blocked
 first, then done, working, idle, and rows without an agent. Within a status
 the most recent state change goes first. A repo's own panes stay above its
-worktrees. The edge under the tree shows the rows listed out of the total, and
+worktrees. The edge under the tree shows the rows listed out of the total (with a query,
+the matches: the parents kept for context do not count), and
 the frame's top border which order is active (`sort: spaces` or
 `sort: priority`).
 
