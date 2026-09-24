@@ -2017,10 +2017,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// A left click on a row moves the cursor; it never selects, so a stray
 		// click cannot switch spaces (same reasoning as asgotopr).
-		if m.panel.open || msg.Button != tea.MouseLeft || !inList(msg.X, msg.Y, listY(false), m.innerW(), m.vp.Height()) {
+		if m.panel.open || msg.Button != tea.MouseLeft || !inList(msg.X, msg.Y, listY, m.innerW(), m.vp.Height()) {
 			return m, nil
 		}
-		if i, ok := rowUnder(msg.Y, listY(false), m.vp.YOffset(), len(m.rows)); ok && i != m.cursor {
+		if i, ok := rowUnder(msg.Y, listY, m.vp.YOffset(), len(m.rows)); ok && i != m.cursor {
 			m.cursor = i
 			m.renderContent()
 		}
@@ -2126,7 +2126,7 @@ func (m model) innerW() int { return max(20, m.width-2) }
 // render stacks the four sections in one frame; the tests assert on it.
 func (m model) render() string {
 	w, side := m.width, stDim.Render("│")
-	out := append(frameHead(w, "", withDevMark(m.status()), m.ti.View()), hline(w, "├", "┤", "", ""))
+	out := append(frameHead(w, withDevMark(m.status()), m.ti.View()), hline(w, "├", "┤", "", ""))
 	lines := strings.Split(m.vp.View(), "\n")
 	if len(m.rows) == 0 {
 		// Nothing to list: say why, as every tool of the family does.
@@ -2139,7 +2139,7 @@ func (m model) render() string {
 		}
 		out = append(out, side+fit(l, m.innerW())+side)
 	}
-	out = append(out, hline(w, "├", "┤", "", m.counter()), framed(w, footLine(m.flash, "", m.help, m.keys, w-4)), hline(w, "╰", "╯", "", ""))
+	out = append(out, hline(w, "├", "┤", "", m.counter()), framed(w, footLine(m.flash, "", "", m.help, m.keys, w-4)), hline(w, "╰", "╯", "", ""))
 	if m.panel.open {
 		keys := keyLines(m.help, m.keys, w-10)
 		out = overlay(out, panelLines(m.options(), m.panel.cursor, keys, w-4, len(out)-2), w)
@@ -2186,7 +2186,7 @@ func (m *model) setOption(id string, v int) tea.Cmd {
 
 // fitBody gives the tree the lines the frame and the help line leave.
 func (m *model) fitBody() {
-	m.vp.SetHeight(max(1, m.height-frameRows(false)-1))
+	m.vp.SetHeight(max(1, m.height-frameRows-1))
 	m.renderContent()
 }
 

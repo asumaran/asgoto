@@ -1,62 +1,44 @@
 package main
 
 // The screen is one rounded frame of sections split by shared edges, the
-// layout asgitlog introduced: the filter input (the edge over it carries what
-// the list is scoped to and its state), the main section (list and preview,
-// split by a divider; its bottom edge carries the matches/total counter under
-// the list, at its right end, and, while the preview overflows, its position on the right) and
-// the help. Neighbours share an edge, so no line is spent on a border of
-// their own.
+// layout asgitlog introduced: the filter input (the edge over it, the top
+// border, carries what the list is scoped to and its state), the main section
+// (list and preview, split by a divider; its bottom edge carries the
+// matches/total counter under the list, at its right end, and, while the
+// preview overflows, its position on the right) and the foot. Neighbours
+// share an edge, so no line is spent on a border of their own.
 //
-// A context line on top is optional and only for what the rest of the screen
-// cannot say (asgitlog: which repository and branch; asgotonotes: which group
-// is being browsed). A title is not context. Without it the status sits on
-// the frame's top border:
+// The foot (helpfoot.go) is the help, or the context and the panel's key when
+// the tool has a context: what the rest of the screen cannot say (asgitlog and
+// asgotochanged: which repository and branch; asgotonotes: which group is
+// being browsed; asgotosession: which directory). A title is not context.
 //
-//	╭────────────────── [vs main] ─╮  0          ╭──────────────────────────────╮
-//	│ filter ❯                     │  1          │ context                      │
-//	├───────────┬──────────────────┤  mainY      ├────────────────── [vs main] ─┤
-//	│ list      │ preview          │  listY …    │ filter ❯                     │
-//	├──── 3/12 ─┴─────────── 8/40 ─┤             ├───────────┬──────────────────┤
-//	│ help                         │             │ list      │ preview          │
-//	╰──────────────────────────────╯             …
+//	╭────────────────── [vs main] ─╮  0
+//	│ filter ❯                     │  1
+//	├───────────┬──────────────────┤  mainY
+//	│ list      │ preview          │  listY …
+//	├──── 3/12 ─┴─────────── 8/40 ─┤
+//	│ context           f1 options │
+//	╰──────────────────────────────╯
 
 import (
 	"strings"
 )
 
 // mainY is the edge over the main section, listY the first list line and
-// frameRows every line that is not the main section's content or the help:
-// the borders, the input and the edges, plus the context line and its edge
-// when there is one.
-func mainY(context bool) int {
-	if context {
-		return 4
-	}
-	return 2
-}
+// frameRows every line that is not the main section's content or the foot:
+// the borders, the input and the edges.
+const (
+	statusY   = 0 // the top border, which carries the scope and the state
+	mainY     = 2
+	listY     = mainY + 1
+	frameRows = 5
+)
 
-func listY(context bool) int { return mainY(context) + 1 }
-
-func frameRows(context bool) int {
-	if context {
-		return 7
-	}
-	return 5
-}
-
-// frameHead is everything above the main section: the top border, the
-// optional context line, the status on the edge over the input, the input.
-func frameHead(w int, context, status, input string) []string {
-	if context == "" {
-		return []string{hline(w, "╭", "╮", "", status), framed(w, input)}
-	}
-	return []string{
-		hline(w, "╭", "╮", "", ""),
-		framed(w, context),
-		hline(w, "├", "┤", "", status),
-		framed(w, input),
-	}
+// frameHead is everything above the main section: the top border with the
+// status, the input.
+func frameHead(w int, status, input string) []string {
+	return []string{hline(w, "╭", "╮", "", status), framed(w, input)}
 }
 
 // splitMain is the main section with a list of listW cells and a preview of

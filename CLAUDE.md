@@ -62,10 +62,13 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   changed: a key, a terminal paste and the input's own `ctrl+v` all edit it,
   and the caller filters again only when it did. The same file in every tool
   of the family.
-- `helpfoot.go`: the help line at the foot, cut to the width, and the key that
-  opens the panel. `footLine` is what the foot shows: a flash first, then a
-  notice in the error color, else the help. The same file in every tool of the
-  family.
+- `helpfoot.go`: the line at the foot and the key that opens the panel.
+  `footLine` is what the foot shows: a flash first, then a notice in the error
+  color, else the help cut to the width; with a context (`info`, styled with
+  `stInfo` and fitted to `footRoom`) the flash, the notice or the context on
+  the left and the panel's key alone on the right (`panelHint`, taken from
+  the tool's own `ShortHelp`). This tool has no context, so its foot is the
+  help. The same file in every tool of the family.
 - `panel.go`: the panel `f1` opens over the frame: options to change in
   place and every key under them (`option`, `panel`, `panelLines`,
   `overlay`). The same file in every tool of the family.
@@ -80,7 +83,7 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   look. The same file in every tool of the family.
 - `frame.go`: the single-frame layout the pickers share: `frameHead`,
   `splitMain` (list and preview) and the section rows (`mainY`, `listY`,
-  `frameRows`, each with or without the optional context line), drawn with the
+  `frameRows`), drawn with the
   primitives of `border.go`. Copied, not imported: the same file ships in
   asgotopr, asgotoissues, asgotonotes, asgotosession and asgotochanged (all
   under github.com/asumaran), and there is no shared library. A pull request
@@ -209,9 +212,10 @@ Non-negotiables that are not obvious from the code:
   the head and the section rows, `border.go` for the primitives): the filter
   input (the border over it carries the active order), the main section (the
   tree, full width: asgoto has no preview, so no `splitMain`; its bottom edge
-  carries the matches/total counter), and the help. A context line on top is
-  only for what the rest of the screen cannot say (asgitlog: repo and
-  branch); a title is not context, so there is none here. The list starts on
+  carries the matches/total counter), and the help. The foot carries a
+  context only where the rest of the screen cannot say it (asgitlog: repo and
+  branch); a title is not context, so there is none here and the foot is the
+  help. The list starts on
   screen row `listY`, one cell in from the left side, which is what the
   click-to-row math uses. Confirmations take the help line.
 - **Moving through the list** is the same in every tool of the family and

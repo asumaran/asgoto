@@ -603,7 +603,7 @@ func TestFrameGeometry(t *testing.T) {
 	}
 	plain := strings.Split(ansi.Strip(m.render()), "\n")
 	if !strings.HasPrefix(plain[0], "╭") || !strings.HasPrefix(plain[len(plain)-1], "╰") ||
-		!strings.HasPrefix(plain[mainY(false)], "├") || !strings.HasPrefix(plain[listY(false)], "│") {
+		!strings.HasPrefix(plain[mainY], "├") || !strings.HasPrefix(plain[listY], "│") {
 		t.Errorf("frame sections misplaced:\n%s", strings.Join(plain, "\n"))
 	}
 	if help := plain[len(plain)-2]; !strings.Contains(help, "type filter") || !strings.Contains(help, "esc/q quit") {
@@ -1059,7 +1059,7 @@ func isQuit(cmd tea.Cmd) bool {
 func TestMouseWheelWalksTheCursor(t *testing.T) {
 	m := copyModel(t, t.TempDir())
 	wheel := func(b tea.MouseButton) {
-		res, cmd := m.Update(tea.MouseWheelMsg{X: 3, Y: listY(false), Button: b})
+		res, cmd := m.Update(tea.MouseWheelMsg{X: 3, Y: listY, Button: b})
 		if cmd != nil {
 			t.Errorf("the wheel returned a command")
 		}
@@ -1075,7 +1075,7 @@ func TestMouseWheelWalksTheCursor(t *testing.T) {
 			t.Fatalf("wheel down %d: cursor %d, want %d", i, m.cursor, i)
 		}
 	}
-	if line := strings.Split(ansi.Strip(m.render()), "\n")[listY(false)+m.cursor]; !strings.HasPrefix(line, "│· ▌") {
+	if line := strings.Split(ansi.Strip(m.render()), "\n")[listY+m.cursor]; !strings.HasPrefix(line, "│· ▌") {
 		t.Errorf("the cursor bar did not follow the wheel: %q", line)
 	}
 	wheel(tea.MouseWheelDown)
@@ -1114,33 +1114,33 @@ func TestClickMovesTheCursorOnly(t *testing.T) {
 		return got
 	}
 	for _, i := range []int{1, 2, 0} { // a worktree, a pane, a repo
-		m = click(m, 3, listY(false)+i, tea.MouseLeft)
+		m = click(m, 3, listY+i, tea.MouseLeft)
 		if m.cursor != i {
 			t.Fatalf("click on row %d: cursor %d", i, m.cursor)
 		}
-		if line := strings.Split(ansi.Strip(m.render()), "\n")[listY(false)+i]; !strings.HasPrefix(line, "│· ▌") {
+		if line := strings.Split(ansi.Strip(m.render()), "\n")[listY+i]; !strings.HasPrefix(line, "│· ▌") {
 			t.Errorf("the cursor bar did not follow the click: %q", line)
 		}
 	}
-	m = click(m, 3, listY(false)+1, tea.MouseLeft)
+	m = click(m, 3, listY+1, tea.MouseLeft)
 	for _, c := range [][2]int{
-		{0, listY(false) + 2},                 // the frame's left side
-		{m.width - 1, listY(false) + 2},       // and its right side
-		{3, mainY(false)},                     // the edge over the list
-		{3, 1},                                // the input
-		{3, listY(false) + len(m.rows)},       // under the last row
-		{3, listY(false) + m.vp.Height()},     // the edge under the list
-		{3, listY(false) + m.vp.Height() + 1}, // the help line
+		{0, listY + 2},                 // the frame's left side
+		{m.width - 1, listY + 2},       // and its right side
+		{3, mainY},                     // the edge over the list
+		{3, 1},                         // the input
+		{3, listY + len(m.rows)},       // under the last row
+		{3, listY + m.vp.Height()},     // the edge under the list
+		{3, listY + m.vp.Height() + 1}, // the help line
 	} {
 		if got := click(m, c[0], c[1], tea.MouseLeft); got.cursor != 1 {
 			t.Errorf("click at %v moved the cursor to %d", c, got.cursor)
 		}
 	}
-	if got := click(m, 3, listY(false)+2, tea.MouseRight); got.cursor != 1 {
+	if got := click(m, 3, listY+2, tea.MouseRight); got.cursor != 1 {
 		t.Errorf("a right click moved the cursor to %d", got.cursor)
 	}
 	m.panel.open = true
-	if got := click(m, 3, listY(false)+2, tea.MouseLeft); got.cursor != 1 {
+	if got := click(m, 3, listY+2, tea.MouseLeft); got.cursor != 1 {
 		t.Errorf("a click under the panel moved the cursor to %d", got.cursor)
 	}
 }
@@ -1162,7 +1162,7 @@ func TestClickFollowsTheScroll(t *testing.T) {
 	if m.vp.YOffset() != len(m.rows)-3 {
 		t.Fatalf("offset %d, want the last three rows on screen", m.vp.YOffset())
 	}
-	res, _ := m.Update(tea.MouseClickMsg{X: 3, Y: listY(false), Button: tea.MouseLeft})
+	res, _ := m.Update(tea.MouseClickMsg{X: 3, Y: listY, Button: tea.MouseLeft})
 	if got := res.(model); got.rows[got.cursor].n.label != "f" {
 		t.Errorf("click on the first line on screen: cursor on %q, want f", got.rows[got.cursor].n.label)
 	}
@@ -1195,11 +1195,11 @@ func TestFrameGeometryAtSizes(t *testing.T) {
 		}
 		plain := strings.Split(ansi.Strip(m.render()), "\n")
 		if !strings.HasPrefix(plain[0], "╭") || !strings.HasPrefix(plain[len(plain)-1], "╰") ||
-			!strings.HasPrefix(plain[mainY(false)], "├") || !strings.HasPrefix(plain[listY(false)], "│") {
+			!strings.HasPrefix(plain[mainY], "├") || !strings.HasPrefix(plain[listY], "│") {
 			t.Errorf("%v: frame sections misplaced:\n%s", size, strings.Join(plain, "\n"))
 		}
 		// The cursor is on the last row, which the short sizes scroll to.
-		if at := plain[listY(false)+m.cursor-m.vp.YOffset()]; !strings.Contains(at, "▌ docs") {
+		if at := plain[listY+m.cursor-m.vp.YOffset()]; !strings.Contains(at, "▌ docs") {
 			t.Errorf("%v: the row under the cursor is not where the click math expects it: %q", size, at)
 		}
 		if edge := plain[len(plain)-3]; !strings.HasSuffix(edge, "─ 5/5 ─┤") {
@@ -1227,7 +1227,7 @@ func TestFrameKeepsOneTreeLine(t *testing.T) {
 		res, _ := base.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m := res.(model)
 		lines := strings.Split(m.render(), "\n")
-		if want := frameRows(false) + 2; len(lines) != want || m.vp.Height() != 1 {
+		if want := frameRows + 2; len(lines) != want || m.vp.Height() != 1 {
 			t.Errorf("%v: %d lines with a tree of %d, want %d with a tree of 1", size, len(lines), m.vp.Height(), want)
 		}
 		for i, l := range lines {
