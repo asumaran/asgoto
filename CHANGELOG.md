@@ -1,3 +1,7 @@
+## v0.24.0 (2026-10-03)
+
+* feat(prs): read pull requests from the shared cache asmeta writes (57666f4)
+
 ## v0.23.0 (2026-10-03)
 
 * feat(search): find spaces by description and pr title (01c43f3)
