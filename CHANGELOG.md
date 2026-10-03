@@ -1,3 +1,7 @@
+## v0.23.0 (2026-10-03)
+
+* feat(search): find spaces by description and pr title (01c43f3)
+
 ## v0.22.1 (2026-09-24)
 
 * refactor(ui): take the shared frame without the context line (de39f3b)
