@@ -76,6 +76,131 @@ func TestSearchByTicketAndPRNumber(t *testing.T) {
 	}
 }
 
+// TestSearchByDescription covers the description: it is search text, and the
+// row shows it on a line of its own only when a term matched it and not the
+// label, so an unfiltered tree and a match by name look as they always did.
+func TestSearchByDescription(t *testing.T) {
+	headers := &node{kind: "worktree", label: "feat/ESHOP-1270-front-platform-headers", desc: "send x-front-platform on BFF requests"}
+	locales := &node{kind: "worktree", label: "fix/ESHOP-2707-ssr-locale-race", desc: "stop help SSR from mixing locales"}
+	repo := &node{kind: "repo", label: "monorepo-front", children: []*node{headers, locales}}
+	roots := []*node{repo}
+
+	m := model{roots: roots, ti: textinput.New()}
+	m.allNodes, m.labels, m.branches = flatten(roots)
+	m.refreshMetas()
+
+	rowOf := func(query string, n *node) (rowItem, bool) {
+		t.Helper()
+		m.ti.SetValue(query)
+		m.applyFilter()
+		for _, r := range m.rows {
+			if r.n == n && r.match {
+				return r, true
+			}
+		}
+		return rowItem{}, false
+	}
+
+	r, ok := rowOf("'bff", headers)
+	if !ok || r.lines() != 2 || r.extra != headers.desc || !equalInts(r.extraIdx, []int{25, 26, 27}) {
+		t.Errorf("query 'bff: row %+v (listed %v), want it with the description shown and BFF marked", r, ok)
+	}
+	if _, ok := rowOf("'bff", locales); ok {
+		t.Errorf("query 'bff matched the locale worktree")
+	}
+	if r, ok := rowOf("'headers", headers); !ok || r.lines() != 1 {
+		t.Errorf("query 'headers: row %+v (listed %v), want it on one line: the label explains it", r, ok)
+	}
+	m.ti.SetValue("")
+	m.applyFilter()
+	for _, r := range m.rows {
+		if r.lines() != 1 {
+			t.Errorf("no query: %q takes %d lines, want 1", r.n.label, r.lines())
+		}
+	}
+}
+
+// TestSearchProseByWord covers the prose (description and PR title): a term
+// finds it only as the start of a word, so a sentence does not match a
+// scattered word the way fuzzy would, and a match only in the PR title shows
+// the title under the row.
+func TestSearchProseByWord(t *testing.T) {
+	cors := &node{kind: "worktree", label: "feat/ESHOP-1270-cors-x-front-platform", desc: "Permitir la cabecera en istio",
+		pr: &prRef{Number: 67986, State: "open", Title: "Allow x-front-platform in eshop istio CORS allowlists"}}
+	headers := &node{kind: "worktree", label: "feat/ESHOP-1270-front-platform-headers", desc: "Cabeceras de plataforma e idioma"}
+	repo := &node{kind: "repo", label: "monorepo-front", children: []*node{cors, headers}}
+	roots := []*node{repo}
+
+	m := model{roots: roots, ti: textinput.New()}
+	m.allNodes, m.labels, m.branches = flatten(roots)
+	m.refreshMetas()
+
+	rows := func(query string) map[*node]rowItem {
+		t.Helper()
+		m.ti.SetValue(query)
+		m.applyFilter()
+		out := map[*node]rowItem{}
+		for _, r := range m.rows {
+			if r.match {
+				out[r.n] = r
+			}
+		}
+		return out
+	}
+
+	if got := rows("locales"); len(got) != 0 {
+		t.Errorf("query locales matched %d rows, want none: no word starts with it", len(got))
+	}
+	if r, ok := rows("cabec")[headers]; !ok || r.extra != headers.desc || !equalInts(r.extraIdx, []int{0, 1, 2, 3, 4}) {
+		t.Errorf("query cabec: row %+v (listed %v), want the description shown with Cabec marked", r, ok)
+	}
+	if r, ok := rows("allowl")[cors]; !ok || r.extra != cors.pr.Title {
+		t.Errorf("query allowl: row %+v (listed %v), want the PR title shown", r, ok)
+	}
+	if r, ok := rows("istio")[cors]; !ok || r.extra != cors.desc {
+		t.Errorf("query istio: row %+v (listed %v), want the description shown: it matched there too", r, ok)
+	}
+	if r, ok := rows("cors")[cors]; !ok || r.extra != "" {
+		t.Errorf("query cors: row %+v (listed %v), want no line: the label explains it", r, ok)
+	}
+}
+
+// TestDescriptionLineScrollsAndClicks covers the line a description adds: the
+// cursor's row stays fully on screen and a click on the description selects
+// the row it belongs to.
+func TestDescriptionLineScrollsAndClicks(t *testing.T) {
+	var roots []*node
+	for _, l := range []string{"a", "b", "c", "d"} {
+		roots = append(roots, &node{kind: "repo", label: l, wsID: "w-" + l, desc: "about " + l})
+	}
+	stampOrder(roots)
+	m := model{roots: roots, ti: textinput.New(), vp: viewport.New(viewport.WithWidth(98), viewport.WithHeight(3)),
+		help: help.New(), keys: defaultKeys(), width: 100, height: 9}
+	m.resort()
+	m.ti.SetValue("'about")
+	m.applyFilter()
+	if got := m.lineOf(len(m.rows)); got != 8 {
+		t.Fatalf("four rows with their descriptions take %d lines, want 8", got)
+	}
+	m.cursor = 2
+	m.renderContent()
+	if m.vp.YOffset() != 3 {
+		t.Errorf("offset %d with the cursor on c, want 3 (c and its description on screen)", m.vp.YOffset())
+	}
+	if got := ansi.Strip(m.vp.View()); !strings.Contains(got, "about c") {
+		t.Errorf("c's description is not on screen:\n%s", got)
+	}
+	// On screen: b's description, c, c's description.
+	res, _ := m.Update(tea.MouseClickMsg{X: 3, Y: listY, Button: tea.MouseLeft})
+	got := res.(model)
+	if got.rows[got.cursor].n.label != "b" {
+		t.Errorf("click on b's description: cursor on %q, want b", got.rows[got.cursor].n.label)
+	}
+	if got.vp.YOffset() != 2 {
+		t.Errorf("offset %d with the cursor on b, want 2 (b back on screen)", got.vp.YOffset())
+	}
+}
+
 // TestSearchByWorktreeFolder covers that a worktree labelled by its branch is
 // still found by the folder it was created as (the name herdr shows in the
 // sidebar and the one the user typed to create it).
@@ -110,7 +235,7 @@ func TestGhPRRef(t *testing.T) {
 		{ghPR{Number: 2, State: "OPEN", IsDraft: true}, prRef{Number: 2, State: "draft"}},
 		{ghPR{Number: 3, State: "MERGED"}, prRef{Number: 3, State: "merged"}},
 		{ghPR{Number: 4, State: "CLOSED"}, prRef{Number: 4, State: "closed"}},
-		{ghPR{Number: 5, State: "OPEN", Title: "FED-2040: wire observability"}, prRef{Number: 5, State: "open", Ticket: "FED-2040"}},
+		{ghPR{Number: 5, State: "OPEN", Title: "FED-2040: wire observability"}, prRef{Number: 5, State: "open", Ticket: "FED-2040", Title: "FED-2040: wire observability"}},
 	}
 	for _, c := range cases {
 		if got := c.in.ref(); got != c.want {

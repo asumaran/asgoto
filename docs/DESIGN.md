@@ -37,8 +37,17 @@ touching the tree building, the filter, the right column or the caches in
 - Search: fuzzy with scoring + a small kind bonus (repo +8, worktree +4) so
   repo/worktree names outrank panes. Besides the label, the branch, the Jira
   ticket and the PR number are matched (typing "1234" finds the row showing
-  #1234). Matches keep ancestors visible and the cursor jumps to the best
-  one (`selectBestMatch`). The corpora (`model.labels`, `branches`, `metas`)
+  #1234). The prose, the space's description (the `desc` sidebar token the
+  asmeta plugin reports) and the PR title, is matched by word instead
+  (`findWords` in `main.go`: a term must start a word, or occur anywhere when written with
+  `'`), because fuzzy over a sentence finds almost anything; a prose-only
+  hit scores `proseScore`, below a good name match. A row whose prose matched
+  a term its label did not shows that prose (the description first) on a
+  second, dim line with the matches marked, so it says why it is listed;
+  without a query, or when the label explains the match, every row is one
+  line. Scrolling and clicks count lines (`lineOf`, `rowAt`), not rows.
+  Matches keep ancestors visible and the cursor jumps to the best
+  one (`selectBestMatch`). The corpora (`model.labels`, `branches`, `metas`; `descs`, `prTitles` for the prose)
   hold the text as shown and the query is matched as typed: the matcher folds
   case itself, and its offsets are bytes into the label the row draws. Digits are plain search text; the
   old "1-9 jumps to a numbered repo" mode was removed on purpose: do not

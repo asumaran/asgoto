@@ -27,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
@@ -53,6 +55,10 @@ type wsInfo struct {
 	Number   int       `json:"number"`
 	Focused  bool      `json:"focused"` // the workspace asgoto was opened from
 	Worktree *worktree `json:"worktree"`
+	// Tokens are the sidebar tokens plugins reported for the space. "desc"
+	// (from the asmeta plugin) says what the branch is about: its PR title,
+	// else its Jira summary.
+	Tokens map[string]string `json:"tokens"`
 }
 
 type paneInfo struct {
@@ -93,6 +99,7 @@ type node struct {
 	label    string // own display text (matched against the query); repo name, worktree branch (folder when unknown), pane leaf
 	branch   string // git branch of the checkout ("" when detached/unknown); shown dim on repo rows, extra search text
 	folder   string // worktree only: checkout folder name (herdr's workspace label); shown dim when it no longer matches the branch, extra search text
+	desc     string // repo/worktree: what the branch is about (the space's "desc" token); extra search text, shown under the row when only it explains a match
 	checkout string // repo/worktree: path of the checkout, for the async ahead/behind lookup ("" when unknown)
 	cwd      string // pane: its working directory as herdr reports it; repo without worktree metadata: its first pane's ("" when unknown)
 	ahead    int    // commits ahead of the upstream (filled async by deltaMsg)
@@ -162,11 +169,13 @@ func saveStateCmd(s persisted) tea.Cmd {
 // ---- GitHub PR info (via gh, async) ----
 
 // prRef is the PR shown next to a branch. Ticket is extracted from the PR
-// title and used only when the branch/label carry no ticket themselves.
+// title and used only when the branch/label carry no ticket themselves. The
+// title itself is search text.
 type prRef struct {
 	Number int    `json:"number"`
 	State  string `json:"state"` // "open" | "draft" | "merged" | "closed"
 	Ticket string `json:"ticket,omitempty"`
+	Title  string `json:"title,omitempty"`
 }
 
 // ghPR mirrors one item of `gh pr list --json number,headRefName,state,isDraft,title`.
@@ -183,7 +192,7 @@ func (p ghPR) ref() prRef {
 	if p.IsDraft && p.State == "OPEN" {
 		state = "draft"
 	}
-	return prRef{Number: p.Number, State: state, Ticket: ticketFrom(p.Title)}
+	return prRef{Number: p.Number, State: state, Ticket: ticketFrom(p.Title), Title: p.Title}
 }
 
 type repoPRs struct {
@@ -1113,6 +1122,7 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 			root = checkout
 			repo.cwd = ps[0].Cwd // what ctrl+y copies when this is no git checkout
 		}
+		repo.desc = main.Tokens["desc"]
 		if checkout != "" {
 			repo.checkout = checkout
 			repo.branch = gitBranch(checkout)
@@ -1154,7 +1164,7 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 			// the folder is just the slug of whatever branch it was created
 			// for, and a later checkout leaves it stale (herdr's sidebar
 			// shows the same branch under the folder label).
-			wt := &node{kind: "worktree", label: ws.Label, folder: ws.Label, wsID: ws.ID}
+			wt := &node{kind: "worktree", label: ws.Label, folder: ws.Label, wsID: ws.ID, desc: ws.Tokens["desc"]}
 			if ws.Worktree != nil {
 				wt.checkout = ws.Worktree.CheckoutPath
 				wt.branch = gitBranch(ws.Worktree.CheckoutPath)
@@ -1277,14 +1287,129 @@ func defaultKeys() keyMap {
 	}
 }
 
+// ---- prose search (description, PR title) ----
+
+// The names (label, branch, ticket) are matched fuzzily, the way they are
+// typed: abbreviated. A sentence is different: fuzzy over a few dozen letters
+// finds almost any word ("locales" in "Allow x-front-platform ... allowlists").
+// So a term finds prose only as the start of one of its words, the way one
+// remembers a sentence ("cabec" finds "Cabeceras"). A term written with a
+// leading ' must occur as typed anywhere, as it does in the other fields.
+
+// proseScore is what a prose match scores: below a good fuzzy match of a
+// name, so a row named after the query still wins the cursor.
+const proseScore = 50
+
+// termHit is what one term of the query found in one row: the fuzzy score
+// and label offsets (from findFields) and, per prose field, the offsets of
+// its match there (nil = no match).
+type termHit struct {
+	score int
+	label []int
+	prose [2][]int // 0: description, 1: PR title
+}
+
+// findWords matches one term against the prose fields (fields[f][i] is field
+// f of row i), keyed by row. A row is a hit when the term starts a word of
+// any of them.
+func findWords(q string, fields ...[]string) map[int][2][]int {
+	hits := map[int][2][]int{}
+	terms := queryTerms(q, true)
+	if len(terms) == 0 {
+		return hits
+	}
+	t := terms[0]
+	for f, corpus := range fields {
+		for i, s := range corpus {
+			if s == "" {
+				continue
+			}
+			if idx := wordMatch(s, t); idx != nil {
+				h := hits[i]
+				h[f] = idx
+				hits[i] = h
+			}
+		}
+	}
+	return hits
+}
+
+// wordMatch returns the byte offsets of t in s, nil when it is not there. A
+// fuzzy term must start a word, ignoring case; a literal one (') may sit
+// anywhere.
+func wordMatch(s string, t qterm) []int {
+	lower := strings.ToLower(s)
+	text := strings.ToLower(t.text)
+	if len(lower) != len(s) {
+		return nil // lowercasing moved the bytes: the offsets would not point into s
+	}
+	at := -1
+	if !t.fuzzy {
+		at = strings.Index(lower, text)
+	} else {
+		for i := 0; i < len(lower); {
+			if strings.HasPrefix(lower[i:], text) && (i == 0 || !wordRune(lastRune(lower[:i]))) {
+				at = i
+				break
+			}
+			_, size := utf8.DecodeRuneInString(lower[i:])
+			i += size
+		}
+	}
+	if at < 0 {
+		return nil
+	}
+	idx := make([]int, 0, len(text))
+	for i := at; i < at+len(text); i++ {
+		idx = append(idx, i)
+	}
+	return idx
+}
+
+func wordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+func lastRune(s string) rune {
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return r
+}
+
+// mergeTerm joins what one term found by name (fuzzy) and in the prose (by
+// word). A row found both ways keeps its fuzzy score.
+func mergeTerm(byName map[int]fieldsHit, byWord map[int][2][]int) map[int]termHit {
+	out := make(map[int]termHit, len(byName)+len(byWord))
+	for i, fh := range byName {
+		out[i] = termHit{score: fh.Score, label: fh.Any[0]}
+	}
+	for i, prose := range byWord {
+		th, ok := out[i]
+		if !ok {
+			th.score = proseScore
+		}
+		th.prose = prose
+		out[i] = th
+	}
+	return out
+}
+
 // ---- bubbletea model ----
 
 type rowItem struct {
-	n     *node
-	depth int
-	match bool
-	score int   // fuzzy score (only meaningful when match)
-	idx   []int // matched character positions, for highlighting
+	n        *node
+	depth    int
+	match    bool
+	score    int    // fuzzy score (only meaningful when match)
+	idx      []int  // matched character positions, for highlighting
+	extra    string // prose shown under the row (description or PR title) when only it explains the match; "" = none
+	extraIdx []int  // matched positions in extra
+}
+
+// lines is how many lines the row takes in the list: one, or two when prose
+// is shown under it.
+func (r rowItem) lines() int {
+	if r.extra != "" {
+		return 2
+	}
+	return 1
 }
 
 type model struct {
@@ -1294,6 +1419,8 @@ type model struct {
 	labels        []string           // the labels as shown, for the matcher (it folds case; its offsets are bytes into them)
 	branches      []string           // branch + worktree folder ("" when same as label); extra match text
 	metas         []string           // ticket + PR number per node ("" when none); extra match text
+	descs         []string           // what the branch is about per node ("" when none); prose match text
+	prTitles      []string           // PR title per node ("" when none); prose match text
 	slugNodes     map[string][]*node // nodes with a branch, grouped by GitHub slug
 	prPending     int                // in-flight gh fetches; cache is saved when it reaches 0
 	cache         prCache            // loaded at startup, merged as repoPRsMsg arrive
@@ -1548,8 +1675,8 @@ func sortLabel(byPriority bool) string {
 // never runs under the label.
 const sortLabelW = len("sort: priority")
 
-// refreshMetas rebuilds the ticket / PR-number search corpus, parallel to
-// allNodes. This is what lets a query like "1234" find the row showing
+// refreshMetas rebuilds the ticket / PR-number search corpus and the prose
+// ones (description, PR title), parallel to allNodes. This is what lets a query like "1234" find the row showing
 // "#1234", or a ticket that only came from a PR title. Rebuilt whenever PR
 // annotations change (they arrive async from gh).
 func (m *model) refreshMetas() {
@@ -1569,6 +1696,15 @@ func (m *model) refreshMetas() {
 			meta += portsText(n)
 		}
 		m.metas = append(m.metas, meta)
+	}
+	m.descs, m.prTitles = m.descs[:0], m.prTitles[:0]
+	for _, n := range m.allNodes {
+		title := ""
+		if n.pr != nil {
+			title = n.pr.Title
+		}
+		m.descs = append(m.descs, n.desc)
+		m.prTitles = append(m.prTitles, title)
 	}
 }
 
@@ -1602,18 +1738,24 @@ func (m *model) applyFilter() {
 	// ticket/PR metadata are searched next to the label, so "feat/x" finds a
 	// worktree whose label is the "feat-x" folder slug and "1234" the row
 	// showing PR #1234. Only label matches are highlighted: the other offsets
-	// point into text the row does not show.
-	var perTerm []map[int]fieldsHit
+	// point into text the row does not show. The prose (description, PR
+	// title) is matched by word instead (findWords): fuzzy over a sentence
+	// finds almost anything. When a term matched the prose and not the label,
+	// the prose is shown under the row with its matches marked, so the row
+	// says why it is listed.
+	var perTerm []map[int]termHit
 	for _, tok := range strings.Fields(m.ti.Value()) {
 		if len(queryTerms(tok, true)) > 0 {
-			perTerm = append(perTerm, findFields(tok, m.labels, m.branches, m.metas))
+			perTerm = append(perTerm, mergeTerm(findFields(tok, m.labels, m.branches, m.metas), findWords(tok, m.descs, m.prTitles)))
 		}
 	}
 	filtering := len(perTerm) > 0
 
 	type hit struct {
-		score int
-		idx   []int
+		score    int
+		idx      []int
+		extra    string // prose to show under the row; "" when the label explains the match
+		extraIdx []int
 	}
 	hits := map[*node]hit{}
 	if filtering {
@@ -1628,13 +1770,26 @@ func (m *model) applyFilter() {
 		mark = func(n *node, above []bool) {
 			covered := slices.Clone(above)
 			own, all, h := false, true, hit{}
+			var proseIdx [2][]int // per prose field: the matches of every term
+			show := false
 			for t, found := range perTerm {
-				if fh, ok := found[index[n]]; ok {
+				if th, ok := found[index[n]]; ok {
 					own, covered[t] = true, true
-					h.score += fh.Score
-					h.idx = mergeIdx(h.idx, fh.Any[0])
+					h.score += th.score
+					h.idx = mergeIdx(h.idx, th.label)
+					for f := range proseIdx {
+						proseIdx[f] = mergeIdx(proseIdx[f], th.prose[f])
+					}
+					show = show || (th.label == nil && (th.prose[0] != nil || th.prose[1] != nil))
 				}
 				all = all && covered[t]
+			}
+			if show {
+				// The description when it matched, else the PR title.
+				h.extra, h.extraIdx = n.desc, proseIdx[0]
+				if proseIdx[0] == nil {
+					h.extra, h.extraIdx = m.prTitles[index[n]], proseIdx[1]
+				}
 			}
 			if own && all {
 				hits[n] = h
@@ -1675,7 +1830,7 @@ func (m *model) applyFilter() {
 	var walk func(n *node, depth int)
 	walk = func(n *node, depth int) {
 		h, ok := hits[n]
-		m.rows = append(m.rows, rowItem{n: n, depth: depth, match: ok, score: h.score, idx: h.idx})
+		m.rows = append(m.rows, rowItem{n: n, depth: depth, match: ok, score: h.score, idx: h.idx, extra: h.extra, extraIdx: h.extraIdx})
 		for _, c := range n.children {
 			if subtree(c) {
 				walk(c, depth+1)
@@ -1779,6 +1934,24 @@ func rowLine(r rowItem, selected bool, width int) string {
 	}
 	left := "  " + indent + prPrefix(r.n) + name
 	return dot + left + rightColumn(rightSegs(r.n), width-2-rightMargin-lipgloss.Width(left), true)
+}
+
+// extraLine is the line under a row whose prose explains the match: the
+// description or the PR title, dim, starting under the label, with the
+// matches marked. It belongs to the row, so it takes the selection highlight
+// with it.
+func extraLine(r rowItem, selected bool, width int) string {
+	pad := "  " + strings.Repeat("  ", r.depth) + strings.Repeat(" ", lipgloss.Width(prPrefixPlain(r.n)))
+	desc, idx := fitLabel(r.extra, r.extraIdx, width-2-rightMargin-lipgloss.Width(pad))
+	if selected {
+		line := pad + desc
+		fill := ""
+		if n := width - 2 - lipgloss.Width(line); n > 0 {
+			fill = strings.Repeat(" ", n)
+		}
+		return "  " + stSel.Render(pad) + highlight(desc, idx, stSel) + stSel.Render(fill)
+	}
+	return "  " + pad + highlight(desc, idx, stDim)
 }
 
 // fitLabel cuts label to room cells and keeps the match offsets (bytes into
@@ -1911,6 +2084,9 @@ func (m *model) renderContent() {
 	var b strings.Builder
 	for i, r := range m.rows {
 		b.WriteString(rowLine(r, i == m.cursor, m.vp.Width()))
+		if r.extra != "" {
+			b.WriteString("\n" + extraLine(r, i == m.cursor, m.vp.Width()))
+		}
 		if i < len(m.rows)-1 {
 			b.WriteString("\n")
 		}
@@ -1919,8 +2095,34 @@ func (m *model) renderContent() {
 	m.ensureVisible()
 }
 
+// lineOf is the list line row i starts on: rows showing their description
+// take two lines.
+func (m *model) lineOf(i int) int {
+	line := 0
+	for _, r := range m.rows[:i] {
+		line += r.lines()
+	}
+	return line
+}
+
+// rowAt is the row on list line line, false past the last row.
+func (m *model) rowAt(line int) (int, bool) {
+	for i, r := range m.rows {
+		if line < r.lines() {
+			return i, true
+		}
+		line -= r.lines()
+	}
+	return 0, false
+}
+
 func (m *model) ensureVisible() {
-	m.vp.SetYOffset(scrollTo(m.vp.YOffset(), m.vp.Height(), len(m.rows), m.cursor, m.cursor))
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		m.vp.SetYOffset(0)
+		return
+	}
+	top := m.lineOf(m.cursor)
+	m.vp.SetYOffset(scrollTo(m.vp.YOffset(), m.vp.Height(), m.lineOf(len(m.rows)), top+m.rows[m.cursor].lines()-1, top))
 }
 
 func (m model) Init() tea.Cmd {
@@ -2020,7 +2222,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.panel.open || msg.Button != tea.MouseLeft || !inList(msg.X, msg.Y, listY, m.innerW(), m.vp.Height()) {
 			return m, nil
 		}
-		if i, ok := rowUnder(msg.Y, listY, m.vp.YOffset(), len(m.rows)); ok && i != m.cursor {
+		line, ok := rowUnder(msg.Y, listY, m.vp.YOffset(), m.lineOf(len(m.rows)))
+		if i, in := m.rowAt(line); ok && in && i != m.cursor {
 			m.cursor = i
 			m.renderContent()
 		}
@@ -2443,6 +2646,9 @@ func queryDump(w io.Writer, m *model, query string) {
 			}
 		}
 		fmt.Fprintf(w, "%s %5s  %s\n", mark, score, dumpLine(r.n, r.depth))
+		if r.extra != "" {
+			fmt.Fprintf(w, "%s  %s  %s\n", strings.Repeat(" ", 7), strings.Repeat("  ", r.depth+1), r.extra)
+		}
 	}
 }
 
@@ -2468,6 +2674,9 @@ func dumpLine(n *node, depth int) string {
 	}
 	if n.folder != "" && n.folder != n.label {
 		extra += " folder=" + n.folder
+	}
+	if n.desc != "" {
+		extra += fmt.Sprintf(" desc=%q", n.desc)
 	}
 	if d := deltaText(n); d != "" {
 		extra += " " + d

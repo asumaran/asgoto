@@ -311,7 +311,7 @@ Non-negotiables that are not obvious from the code:
   (the folder is a stale slug after a checkout). The folder stays searchable.
 - A label longer than the row is cut with an ellipsis (`fitLabel`), as every
   list of the family does, and the match offsets past the cut are dropped.
-  The match corpora (`model.labels`, `branches`, `metas`) hold the text as
+  The match corpora (`model.labels`, `branches`, `metas`; `descs`, `prTitles` for the prose) hold the text as
   shown and the query is matched as typed: the matcher folds case itself, and
   its offsets are bytes into the label the row draws.
 - The right column reads like a git shell prompt: the branch, `↑`/`↓`, then

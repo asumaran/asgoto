@@ -81,9 +81,16 @@ Around each name:
 ### Search
 
 Typing filters the tree with fuzzy matching. A query of several words matches them in any order (`login fix` finds "fix login flow"), and a word starting with `'` must occur as typed instead of fuzzily (`'dex`). In the tree a word may match the row and another one of its parents (`herdr fix` finds the fix worktree of herdr). The query is matched against the
-row name, the branch, the worktree folder, the Jira ticket, the PR number and
-the listening ports, so "1234" finds the row showing #1234 and "3000" finds
-whoever holds that port. Matching rows keep their ancestors visible and the
+row name, the branch, the worktree folder, the Jira ticket, the PR number, the
+listening ports, so "1234" finds the row showing #1234 and "3000" finds
+whoever holds that port. Two pieces of prose are searched too: the space's
+description (the `desc` sidebar token a herdr plugin reports for it; in the
+author's setup, a short summary of what the branch is about) and the PR title.
+Fuzzy matching over a sentence would find almost any word, so in the prose a
+word must start one of its words (`cabec` finds "Cabeceras", `locales` does
+not find "allowlists"). When the prose is what a word matched, and the name
+did not, it shows dimmed on a line under the row with the match marked (the
+description when it matched, else the PR title); otherwise it stays hidden. Matching rows keep their ancestors visible and the
 cursor jumps to the best match. On ties, repos and worktrees outrank panes,
 so typing "h" lands on herdr. Pasting into the filter (a terminal paste or
 `ctrl+v`) filters like typing does. A query of spaces only, or a bare `~` or `'`, is
