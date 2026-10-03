@@ -136,12 +136,61 @@ touching the tree building, the filter, the right column or the caches in
   label, then PR title as fallback) and the branch's PR number colored by
   state (open green, draft dim, merged purple, closed red). Columns align per
   sibling group; rows with neither ticket nor PR get no prefix. PR data comes
-  from one async command per unique GitHub repo (a `gh pr list --head
-  <branch>` per local branch, in parallel, through `ghRun`), fired after the TUI is
-  on screen, and cached in `prcache.json` next to the settings
-  (stale-while-revalidate; entries fresher than 60s skip the refresh).
-  Missing `gh` or non-GitHub remotes degrade silently to no PR info.
+  from the shared PR cache (below): asgoto never runs gh.
 - herdr surface asgoto depends on. Read: `workspace list`, `pane list`,
   `agent list` (only for `state_change_seq`) and `pane process-info`, all
   JSON over the CLI, plus `config.toml` for the status indicators. Act:
   `workspace focus <wsID>` and the socket's `pane.focus` (see above).
+
+## Shared PR cache
+
+The one written contract of `prs.json`; `prshare.go` (byte-identical in
+asgoto, asgotoissues, asgotopr and asmeta) is its code, and its test embeds
+the golden example.
+
+- **Writer: asmeta, only.** One GitHub GraphQL query per refresh for every
+  (head repo, branch) of every workspace (up to 100 per query), values passed
+  as variables. A checkout's PRs are looked up in its `upstream` remote when
+  it has one (a fork), else in `origin`; only PRs whose head repo is the
+  checkout's origin count; the newest open PR wins, else the newest. Triggers:
+  server startup, workspace created / worktree opened / renamed (always),
+  focus (only when a branch is missing or checked more than the focus
+  throttle ago), the `refresh` actions and `refresh-prs` (forced). A refresh
+  takes `prs.lock` (kernel flock); a request that finds the lock taken waits,
+  and if a query started after it was made, uses that answer instead of
+  querying again. A repo whose alias fails keeps its entries; a total failure
+  leaves the file alone; a rate limit sets `backoff_until` (5 min, forced
+  refreshes ignore it). The result is merged per entry, never a replacement,
+  so two herdr sessions sharing the state dir never erase each other. After a
+  refresh asmeta publishes again every workspace whose PR changed.
+- **File:** `<state>/herdr/plugins/asumaran.asmeta/prs.json`, found by a
+  reader as the sibling of its own state dir (`sharedPRFile`).
+
+  ```json
+  {
+   "version": 1,
+   "last_query_started_at": "2026-10-03T15:20:00Z",
+   "backoff_until": null,
+   "branches": {"<head repo>": {"<branch>": {"url": "<PR url or null>", "checked_at": "..."}}},
+   "pulls": {"<url>": {"repo": "...", "number": 41, "head": "...", "base": "...",
+             "state": "open|draft|merged|closed", "title": "...", "body": "...",
+             "updated_at": "...", "checked_at": "..."}}
+  }
+  ```
+
+  Repo keys lowercased; `url: null` = checked, no PR; a missing branch =
+  never checked; `draft` only while open; entries not checked for 30 days and
+  PRs no branch points to are pruned. A file that does not parse or has
+  another `version` reads as empty.
+- **asgoto** reads the association (`annotatePRs`, `branch(slug, branch)`):
+  the cache paints the first frame; when one of its branches is missing or
+  older than 60s (`prFresh`) it runs `herdr plugin action invoke
+  asumaran.asmeta.refresh-prs` once, and the open popup stats the file every
+  500ms (`watchPRsCmd`) and repaints when it changes. A ticket taken from a
+  PR title (`prTicket`) is replaced or cleared with the PR. Without asmeta
+  there is no PR column. `-dump` reads the file and triggers nothing.
+- **asgotoissues and asgotopr** find their PRs with their own searches and
+  borrow facts by URL only (`pull(url)`), when the file saw a later
+  `updated_at`, as a display layer over their own cache.
+- Branches whose PR is never looked up, in every tool: detached, `main`,
+  `master`, `develop` (`prSkipBranch`).

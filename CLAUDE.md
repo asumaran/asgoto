@@ -118,10 +118,12 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
 - `ticket.go`: `ticketFrom`: the ticket key (`KEY-123`, uppercased) found in a
   branch name, a title or a folder name. The same file in every tool of the
   family that needs it.
-- `ghrun.go`: `ghRun`: running the GitHub CLI. A failure is said the way gh
-  said it (the first line of its stderr), and a missing gh reads `gh not found
-  (install the GitHub CLI)`. The tests replace it. The same file in every tool
-  of the family that runs gh.
+- `prshare.go`: the shared PR cache (`prs.json` in asmeta's state dir):
+  types, `loadSharedPRs`, `branch(slug, branch)`, `pull(url)`,
+  `sharedPRState`, `prSkipBranch`, and the writer's `merge`, `save` and
+  `lockSharedPRs` (asmeta is the only writer). The same file in every tool of
+  the family that shows PRs (asgoto, asgotoissues, asgotopr, asmeta); the
+  format is in `docs/DESIGN.md`, "Shared PR cache".
 - `jsonfile.go`: `readJSONFile`, `writeJSONFile`, `writeFileAtomic`: a JSON
   cache in the state dir. A file that is missing or does not parse reads as
   nothing, and a write goes through a temporary file and a rename, so a popup
@@ -267,7 +269,7 @@ Non-negotiables that are not obvious from the code:
   which is how the tests and the pty check log it.
 - **`-dump` / `-query`**: flags are parsed with `flag` (`-version`, `-dump`,
   `-query`). `-dump` runs the same `main()` path as the popup up to the model
-  (herdr reads, `buildTree`, sort, PR cache, process rows; ports and git
+  (herdr reads, `buildTree`, sort, the shared PR cache, process rows; ports and git
   hints are fetched synchronously) and hands it to `runDump`, which prints
   every node with `dumpLine`. `-dump -query x` goes through `queryDump`: it
   sets the input, calls `applyFilter` and `selectBestMatch` on that model and
@@ -321,8 +323,12 @@ Non-negotiables that are not obvious from the code:
 - Enter on a repo/worktree never changes the focused pane inside it, and
   switching never autofocuses the agent pane.
 - Process rows are resolved synchronously before the first paint (they add
-  rows); ports, git hints and PR data arrive async and only fill columns
-  that are already sized from `prcache.json`.
+  rows); ports and git hints arrive async and only fill columns that are
+  already sized from `prcache.json`. PRs come from the shared cache asmeta
+  writes (`prshare.go`): painted from the file, asmeta asked to refresh
+  through `herdr plugin action invoke asumaran.asmeta.refresh-prs` when it is
+  stale, and the open popup repaints when the file changes. asgoto never runs
+  gh.
 - No breadcrumb line under the prompt (removed as redundant with the tree).
 
 ## Testing
@@ -331,9 +337,12 @@ For end-to-end verification without a TTY, `scripts/pty-check.py ./asgoto`
 (python3 + `pyte`) spawns the binary on a pty, answers the terminal queries,
 replays keystrokes and asserts on pyte-rendered frames, in a throwaway sandbox
 (a herdr stub as `HERDR_BIN_PATH` serving a synthetic session and logging
-every call, no socket, a `gh` stub first on `PATH`, a clipboard stub as
-`ASGOTO_CLIPBOARD` logging what `ctrl+y` feeds it). It also runs `-dump` and
-`-dump -query` without a pty against the same stubs. The v2 renderer repaints with scroll regions, which pyte ignores, so the
+every call, no socket, a `gh` stub first on `PATH` that logs a call asgoto
+must never make, a clipboard stub as `ASGOTO_CLIPBOARD` logging what `ctrl+y`
+feeds it). It also runs `-dump` and `-dump -query` without a pty against the
+same stubs, and checks the PRs end to end: a real checkout with a GitHub
+origin, a `prs.json` in asmeta's sandbox state dir, the refresh action when
+it is stale, the repaint when the file changes. The v2 renderer repaints with scroll regions, which pyte ignores, so the
 driver forces a full redraw (pty resize + SIGWINCH) before reading a frame.
 
 ## Commits & branches

@@ -147,11 +147,14 @@ no directory for the row. `ASGOTO_CLIPBOARD` replaces the clipboard command the 
 ## Behavior notes
 
 - The only thing asgoto changes in herdr is the focus: the space or the pane
-  `enter` lands on. Everything else (herdr, git, `gh`, `lsof`) is read.
+  `enter` lands on. Everything else (herdr, git, `lsof`) is read.
 - The panes and the order are remembered between sessions, like every option
   of the panel.
-- PR numbers need `gh` (authenticated) and a GitHub remote. Ports need `lsof`.
-  Without them asgoto still works and leaves those columns out.
+- PR numbers come from the [asmeta](https://github.com/asumaran/asmeta)
+  plugin, which looks the PRs of every workspace up in one GitHub query and
+  shares them with the sidebar. Without asmeta, or without a GitHub remote,
+  there is no PR column. Ports need `lsof`; without it that column is left
+  out too.
 - The git hints come from one `git status` per checkout, run in the background
   once the list is on screen. The last known values are cached, so they paint
   right away and get corrected if anything changed. On a large repo

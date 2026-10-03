@@ -112,8 +112,9 @@ type node struct {
 	unstagW  int    // width of the "!n" column shared by every row (0 = no row has unstaged files)
 	untrkW   int    // width of the "?n" column shared by every row (0 = no row has untracked files)
 	ticket   string // normalized Jira key ("FED-2030") from branch/label, or the PR title as fallback
+	prTicket bool   // ticket came from the PR title, so a new PR replaces or clears it
 	ghSlug   string // "owner/repo" of the GitHub origin; "" when non-GitHub/unknown
-	pr       *prRef // PR for this branch, annotated from cache/gh; nil until known or when none
+	pr       *prRef // PR for this branch, from the shared PR cache; nil until known or when none
 	tktW     int    // ticket column width within the sibling group (0 = no prefix)
 	prW      int    // "#123" column width within the sibling group (0 = no PR column)
 	wsID     string // workspace to focus (repo/worktree, and a pane's workspace)
@@ -166,55 +167,33 @@ func saveStateCmd(s persisted) tea.Cmd {
 	}
 }
 
-// ---- GitHub PR info (via gh, async) ----
+// ---- GitHub PR info (the shared PR cache, prshare.go) ----
 
 // prRef is the PR shown next to a branch. Ticket is extracted from the PR
 // title and used only when the branch/label carry no ticket themselves. The
 // title itself is search text.
 type prRef struct {
-	Number int    `json:"number"`
-	State  string `json:"state"` // "open" | "draft" | "merged" | "closed"
-	Ticket string `json:"ticket,omitempty"`
-	Title  string `json:"title,omitempty"`
+	Number int
+	State  string // "open" | "draft" | "merged" | "closed"
+	Ticket string
+	Title  string
 }
 
-// ghPR mirrors one item of `gh pr list --json number,headRefName,state,isDraft,title`.
-type ghPR struct {
-	Number      int    `json:"number"`
-	HeadRefName string `json:"headRefName"`
-	State       string `json:"state"` // OPEN | MERGED | CLOSED
-	IsDraft     bool   `json:"isDraft"`
-	Title       string `json:"title"`
+func prRefFrom(p sharedPR) prRef {
+	return prRef{Number: p.Number, State: p.State, Ticket: ticketFrom(p.Title), Title: p.Title}
 }
 
-func (p ghPR) ref() prRef {
-	state := strings.ToLower(p.State)
-	if p.IsDraft && p.State == "OPEN" {
-		state = "draft"
-	}
-	return prRef{Number: p.Number, State: state, Ticket: ticketFrom(p.Title), Title: p.Title}
-}
-
-type repoPRs struct {
-	FetchedAt time.Time        `json:"fetched_at"`
-	Branches  map[string]prRef `json:"branches"`
-}
-
-// prCache is the stale-while-revalidate disk cache of branch -> PR per repo
-// and of the git hints (ahead/behind, staged/unstaged/untracked) per checkout path: cached
-// entries render immediately on startup while gh / git refresh them in the
-// background, so the info is visible even in this tool's open-pick-exit
-// lifetime, and the hint columns are sized from the first paint instead of
-// shifting when the refresh lands.
+// prCache is asgoto's own disk cache: the git hints (ahead/behind,
+// staged/unstaged/untracked) per checkout path, so the hint columns are sized
+// from the first paint instead of shifting when the refresh lands. PRs live
+// in the shared cache, which asmeta writes.
 type prCache struct {
-	Repos map[string]repoPRs  `json:"repos"`
 	Hints map[string]gitDelta `json:"hints,omitempty"`
 }
 
-// prCacheFresh is how recent a repo's cached PRs must be to skip the
-// background refresh. It only debounces rapid reopen cycles; older entries
-// are still shown immediately while they revalidate.
-const prCacheFresh = 60 * time.Second
+// prFresh is how recent a branch's entry in the shared cache must be for
+// asgoto not to ask asmeta for a refresh.
+const prFresh = 60 * time.Second
 
 func prCacheFile() string {
 	return filepath.Join(stateDir(), "prcache.json")
@@ -223,9 +202,6 @@ func prCacheFile() string {
 func loadPRCache() prCache {
 	var c prCache
 	readJSONFile(prCacheFile(), &c)
-	if c.Repos == nil {
-		c.Repos = map[string]repoPRs{}
-	}
 	if c.Hints == nil {
 		c.Hints = map[string]gitDelta{}
 	}
@@ -246,92 +222,85 @@ func savePRCacheCmd(c prCache) tea.Cmd {
 	}
 }
 
-// repoPRsMsg delivers one repo's branch -> PR mapping fetched from gh. err
-// leaves nodes and cache untouched (missing gh, network down, non-GitHub);
-// degradation is silent by design.
-type repoPRsMsg struct {
-	slug     string
-	byBranch map[string]prRef
-	err      bool
-}
-
-// fetchRepoPRsCmd resolves the PR of each local branch with one
-// `gh pr list --head <branch>` call per branch, run in parallel. A repo-wide
-// listing would miss older PRs in busy shared repos, where the newest N PRs
-// are mostly other people's. prev (the previously cached mapping) fills in
-// branches whose lookup failed transiently, so an error never wipes a valid
-// cached PR; only when every branch fails is the whole message marked err.
-func fetchRepoPRsCmd(slug string, branches []string, prev map[string]prRef) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
-		type result struct {
-			pr  *prRef
-			err bool
+// prNodes are the nodes whose branch can have a PR.
+func prNodes(all []*node) []*node {
+	var out []*node
+	for _, n := range all {
+		if n.ghSlug != "" && !prSkipBranch(n.branch) {
+			out = append(out, n)
 		}
-		results := make([]result, len(branches))
-		var wg sync.WaitGroup
-		for i, branch := range branches {
-			wg.Add(1)
-			go func(i int, branch string) {
-				defer wg.Done()
-				out, err := ghRun(ctx, "pr", "list", "--repo", slug,
-					"--head", branch, "--state", "all",
-					"--json", "number,headRefName,state,isDraft,title",
-					"--limit", "5")
-				if err != nil {
-					results[i] = result{err: true}
-					return
-				}
-				var prs []ghPR
-				if json.Unmarshal(out, &prs) != nil {
-					results[i] = result{err: true}
-					return
-				}
-				if len(prs) > 0 {
-					p := prs[0].ref() // newest first
-					results[i] = result{pr: &p}
-				}
-			}(i, branch)
-		}
-		wg.Wait()
-
-		byBranch := map[string]prRef{}
-		errs := 0
-		for i, r := range results {
-			switch {
-			case r.err:
-				errs++
-				if p, ok := prev[branches[i]]; ok {
-					byBranch[branches[i]] = p
-				}
-			case r.pr != nil:
-				byBranch[branches[i]] = *r.pr
-			}
-		}
-		if errs == len(branches) {
-			return repoPRsMsg{slug: slug, err: true}
-		}
-		return repoPRsMsg{slug: slug, byBranch: byBranch}
 	}
+	return out
 }
 
-// annotatePRs applies a branch -> PR mapping to one repo's nodes, clearing
-// entries whose branch no longer has a PR and falling back to the PR-title
-// ticket when branch/label yielded none.
-func annotatePRs(nodes []*node, byBranch map[string]prRef) {
+// annotatePRs applies the shared cache to the nodes: each gets its branch's
+// PR or none, and the ticket of the PR title when branch/label yielded none
+// (replaced or cleared when the PR changes).
+func annotatePRs(nodes []*node, prs sharedPRs) {
 	for _, n := range nodes {
-		p, ok := byBranch[n.branch]
-		if !ok {
+		if n.prTicket {
+			n.ticket, n.prTicket = "", false
+		}
+		p, _, _ := prs.branch(n.ghSlug, n.branch)
+		if p == nil {
 			n.pr = nil
 			continue
 		}
-		pp := p
-		n.pr = &pp
-		if n.ticket == "" && p.Ticket != "" {
-			n.ticket = p.Ticket
+		r := prRefFrom(*p)
+		n.pr = &r
+		if n.ticket == "" && r.Ticket != "" {
+			n.ticket, n.prTicket = r.Ticket, true
 		}
 	}
+}
+
+// prsStale: some branch was never checked, or not in the last prFresh.
+func prsStale(nodes []*node, prs sharedPRs, now time.Time) bool {
+	for _, n := range nodes {
+		if _, checked, at := prs.branch(n.ghSlug, n.branch); !checked || now.Sub(at) >= prFresh {
+			return true
+		}
+	}
+	return false
+}
+
+// refreshPRsCmd asks asmeta to refresh the shared cache. The answer lands in
+// the file, which watchPRsCmd picks up; without asmeta it fails, silently,
+// and there is no PR column.
+func refreshPRsCmd() tea.Cmd {
+	return func() tea.Msg {
+		_ = herdrDo("plugin", "action", "invoke", "asumaran.asmeta.refresh-prs")
+		return nil
+	}
+}
+
+// sharedPRsMsg carries the shared cache after the file changed; prWatchMsg
+// keeps watching when it did not.
+type sharedPRsMsg struct {
+	prs   sharedPRs
+	mtime time.Time
+}
+
+type prWatchMsg struct{ mtime time.Time }
+
+// prWatchEvery is how often the open popup looks at the file's mtime: one
+// stat, so a refresh asmeta finishes while the popup is open shows at once.
+const prWatchEvery = 500 * time.Millisecond
+
+func sharedPRsMtime() time.Time {
+	if fi, err := os.Stat(sharedPRFile()); err == nil {
+		return fi.ModTime()
+	}
+	return time.Time{}
+}
+
+func watchPRsCmd(seen time.Time) tea.Cmd {
+	return tea.Tick(prWatchEvery, func(time.Time) tea.Msg {
+		if mt := sharedPRsMtime(); mt.After(seen) {
+			return sharedPRsMsg{prs: loadSharedPRs(), mtime: mt}
+		}
+		return prWatchMsg{mtime: seen}
+	})
 }
 
 // ---- foreground processes (herdr pane process-info) ----
@@ -1415,16 +1384,15 @@ func (r rowItem) lines() int {
 type model struct {
 	width, height int // terminal size, from the last WindowSizeMsg
 	roots         []*node
-	allNodes      []*node            // flattened, parallel to labels/branches/metas
-	labels        []string           // the labels as shown, for the matcher (it folds case; its offsets are bytes into them)
-	branches      []string           // branch + worktree folder ("" when same as label); extra match text
-	metas         []string           // ticket + PR number per node ("" when none); extra match text
-	descs         []string           // what the branch is about per node ("" when none); prose match text
-	prTitles      []string           // PR title per node ("" when none); prose match text
-	slugNodes     map[string][]*node // nodes with a branch, grouped by GitHub slug
-	prPending     int                // in-flight gh fetches; cache is saved when it reaches 0
-	cache         prCache            // loaded at startup, merged as repoPRsMsg arrive
-	initCmds      []tea.Cmd          // PR fetches to fan out from Init
+	allNodes      []*node   // flattened, parallel to labels/branches/metas
+	labels        []string  // the labels as shown, for the matcher (it folds case; its offsets are bytes into them)
+	branches      []string  // branch + worktree folder ("" when same as label); extra match text
+	metas         []string  // ticket + PR number per node ("" when none); extra match text
+	descs         []string  // what the branch is about per node ("" when none); prose match text
+	prTitles      []string  // PR title per node ("" when none); prose match text
+	prNodes       []*node   // nodes whose branch can have a PR
+	cache         prCache   // loaded at startup, merged as deltaMsg arrive
+	initCmds      []tea.Cmd // PR fetches to fan out from Init
 	rows          []rowItem
 	cursor        int
 	showPanes     bool // panes are hidden by default; ctrl+a toggles them (the family's "list more" key)
@@ -2180,28 +2148,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.renderContent()
 		return m, nil
 
-	case repoPRsMsg:
-		if !msg.err {
-			annotatePRs(m.slugNodes[msg.slug], msg.byBranch)
-			m.cache.Repos[msg.slug] = repoPRs{FetchedAt: time.Now(), Branches: msg.byBranch}
-			layoutPrefixes(m.roots)
-			// PR numbers are searchable, so a fresh annotation can change the
-			// results of the query being typed; re-filter, keeping the cursor
-			// on the same node.
-			m.refreshMetas()
-			var cur *node
-			if m.cursor >= 0 && m.cursor < len(m.rows) {
-				cur = m.rows[m.cursor].n
-			}
-			m.applyFilter()
-			m.keepCursorOn(cur)
-			m.renderContent()
+	case prWatchMsg:
+		return m, watchPRsCmd(msg.mtime)
+
+	case sharedPRsMsg:
+		annotatePRs(m.prNodes, msg.prs)
+		layoutPrefixes(m.roots)
+		// PR numbers are searchable, so a fresh annotation can change the
+		// results of the query being typed; re-filter, keeping the cursor on
+		// the same node.
+		m.refreshMetas()
+		var cur *node
+		if m.cursor >= 0 && m.cursor < len(m.rows) {
+			cur = m.rows[m.cursor].n
 		}
-		m.prPending--
-		if m.prPending <= 0 {
-			return m, savePRCacheCmd(m.cache)
-		}
-		return m, nil
+		m.applyFilter()
+		m.keepCursorOn(cur)
+		m.renderContent()
+		return m, watchPRsCmd(msg.mtime)
 
 	case tea.MouseWheelMsg:
 		// There is no preview to scroll: the wheel walks the cursor.
@@ -2470,45 +2434,23 @@ func main() {
 	sortTree(roots, state.PrioritySort)
 	allNodes, labels, branches := flatten(roots)
 
-	// Annotate PR info from the disk cache (instant), then schedule a gh
-	// refresh per repo whose cache entry is missing or no longer fresh. The
-	// fetches run from Init, after the TUI is already on screen.
-	slugNodes := map[string][]*node{}
-	for _, n := range allNodes {
-		if n.ghSlug != "" && n.branch != "" {
-			slugNodes[n.ghSlug] = append(slugNodes[n.ghSlug], n)
-		}
-	}
+	// PRs come from the shared cache asmeta writes (instant). When some
+	// branch is missing from it or stale, asmeta is asked for a refresh; the
+	// open popup watches the file and repaints when it changes.
+	pnodes := prNodes(allNodes)
 	cache := loadPRCache()
-	for slug, nodes := range slugNodes {
-		if entry, ok := cache.Repos[slug]; ok {
-			annotatePRs(nodes, entry.Branches)
-		}
-	}
+	prMtime := sharedPRsMtime()
+	prs := loadSharedPRs()
+	annotatePRs(pnodes, prs)
 	layoutPrefixes(roots)
 	var initCmds []tea.Cmd
-	for slug, nodes := range slugNodes {
-		if entry, ok := cache.Repos[slug]; ok && time.Since(entry.FetchedAt) < prCacheFresh {
-			continue
+	if !dump {
+		initCmds = append(initCmds, watchPRsCmd(prMtime))
+		if prsStale(pnodes, prs, time.Now()) {
+			initCmds = append(initCmds, refreshPRsCmd())
 		}
-		// One --head lookup per unique local branch; main/master checkouts are
-		// skipped (a PR with that head would be someone else's release train).
-		seen := map[string]bool{}
-		var branches []string
-		for _, n := range nodes {
-			if n.branch == "main" || n.branch == "master" || seen[n.branch] {
-				continue
-			}
-			seen[n.branch] = true
-			branches = append(branches, n.branch)
-		}
-		if len(branches) == 0 {
-			continue
-		}
-		initCmds = append(initCmds, fetchRepoPRsCmd(slug, branches, cache.Repos[slug].Branches))
 	}
 
-	prPending := len(initCmds)
 	paneIDs := make([]string, 0, len(pn.Result.Panes))
 	for _, p := range pn.Result.Panes {
 		paneIDs = append(paneIDs, p.ID)
@@ -2544,8 +2486,7 @@ func main() {
 		allNodes:     allNodes,
 		labels:       labels,
 		branches:     branches,
-		slugNodes:    slugNodes,
-		prPending:    prPending,
+		prNodes:      pnodes,
 		cache:        cache,
 		initCmds:     initCmds,
 		showPanes:    state.ShowPanes,

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/textinput"
@@ -226,21 +227,54 @@ func TestSearchByWorktreeFolder(t *testing.T) {
 	}
 }
 
-func TestGhPRRef(t *testing.T) {
-	cases := []struct {
-		in   ghPR
-		want prRef
-	}{
-		{ghPR{Number: 1, State: "OPEN"}, prRef{Number: 1, State: "open"}},
-		{ghPR{Number: 2, State: "OPEN", IsDraft: true}, prRef{Number: 2, State: "draft"}},
-		{ghPR{Number: 3, State: "MERGED"}, prRef{Number: 3, State: "merged"}},
-		{ghPR{Number: 4, State: "CLOSED"}, prRef{Number: 4, State: "closed"}},
-		{ghPR{Number: 5, State: "OPEN", Title: "FED-2040: wire observability"}, prRef{Number: 5, State: "open", Ticket: "FED-2040", Title: "FED-2040: wire observability"}},
+func TestAnnotatePRsFromSharedCache(t *testing.T) {
+	prs := decodeSharedPRs([]byte(goldenPRs))
+	withPR := &node{ghSlug: "asumaran/asgoto", branch: "feat/shared-pr-cache"}
+	none := &node{ghSlug: "asumaran/asgoto", branch: "fix/old-thing", pr: &prRef{Number: 9}}
+	own := &node{ghSlug: "asumaran/asgoto", branch: "feat/shared-pr-cache", ticket: "OWN-1"}
+	annotatePRs([]*node{withPR, none, own}, prs)
+	if withPR.pr == nil || *withPR.pr != (prRef{Number: 41, State: "draft", Title: "feat(prs): read the shared PR cache"}) {
+		t.Errorf("pr = %+v", withPR.pr)
 	}
-	for _, c := range cases {
-		if got := c.in.ref(); got != c.want {
-			t.Errorf("ref(%+v) = %+v, want %+v", c.in, got, c.want)
-		}
+	if none.pr != nil {
+		t.Error("a branch checked with no PR clears a stale one")
+	}
+	if own.ticket != "OWN-1" || own.prTicket {
+		t.Error("the branch's own ticket wins over the PR title's")
+	}
+
+	// a ticket taken from a PR title goes with that PR
+	n := &node{ghSlug: "me/r", branch: "b"}
+	url := "https://github.com/me/r/pull/1"
+	s := emptySharedPRs()
+	s.Branches["me/r"] = map[string]sharedBranch{"b": {URL: &url, CheckedAt: time.Now()}}
+	s.Pulls[url] = sharedPR{Number: 1, State: "open", Title: "FED-2040: wire observability"}
+	annotatePRs([]*node{n}, s)
+	if n.ticket != "FED-2040" || n.pr.Ticket != "FED-2040" {
+		t.Fatalf("ticket from the PR title: %q %+v", n.ticket, n.pr)
+	}
+	s.Pulls[url] = sharedPR{Number: 1, State: "open", Title: "no ticket now"}
+	annotatePRs([]*node{n}, s)
+	if n.ticket != "" {
+		t.Errorf("a PR title without a ticket clears the one it gave: %q", n.ticket)
+	}
+}
+
+func TestPRsStale(t *testing.T) {
+	prs := decodeSharedPRs([]byte(goldenPRs))
+	at := time.Date(2026, 10, 3, 15, 20, 1, 0, time.UTC)
+	nodes := []*node{{ghSlug: "asumaran/asgoto", branch: "feat/shared-pr-cache"}}
+	if prsStale(nodes, prs, at.Add(30*time.Second)) {
+		t.Error("checked 30s ago is fresh")
+	}
+	if !prsStale(nodes, prs, at.Add(2*time.Minute)) {
+		t.Error("checked 2 min ago is stale")
+	}
+	if !prsStale([]*node{{ghSlug: "asumaran/asgoto", branch: "never"}}, prs, at) {
+		t.Error("a branch never checked is stale")
+	}
+	if got := prNodes([]*node{{ghSlug: "a/b", branch: "develop"}, {ghSlug: "", branch: "x"}, {ghSlug: "a/b", branch: "x"}}); len(got) != 1 {
+		t.Errorf("prNodes = %d, want only the feature branch of a GitHub checkout", len(got))
 	}
 }
 

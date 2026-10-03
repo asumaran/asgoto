@@ -137,7 +137,8 @@ f="%s/$1-$2.json"
 if [ -f "$f" ]; then cat "$f"; else printf '{}'; fi
 """ % (calls_log, data), 0o755)
 stub_bin = os.path.join(SANDBOX, "bin")
-write(os.path.join(stub_bin, "gh"), "#!/bin/sh\nprintf '[]'\n", 0o755)
+gh_log = os.path.join(SANDBOX, "gh.log")
+write(os.path.join(stub_bin, "gh"), "#!/bin/sh\nprintf '%%s\\n' \"$*\" >> \"%s\"\nprintf '[]'\n" % gh_log, 0o755)
 clip_log = os.path.join(SANDBOX, "clipboard.log")
 clipboard = write(os.path.join(SANDBOX, "clipboard"), '#!/bin/sh\ncat > "%s"\n' % clip_log, 0o755)
 
@@ -280,5 +281,42 @@ check(out[0] == 'query "checkout": 3 listed, 2 matched (sort: spaces, plain pane
 p = run_plain("-dump", HERDR_BIN_PATH=os.path.join(SANDBOX, "no-herdr"))
 check(p.returncode == 1 and p.stdout == "" and "asgoto: herdr workspace list:" in p.stderr,
       "-dump without herdr says so and exits 1: %r" % p.stderr)
+
+# ---------- PRs: the shared cache asmeta writes ----------
+# A real checkout (its origin says which GitHub repo it is) and a prs.json in
+# asmeta's state dir. asgoto reads it, never runs gh, and asks asmeta for a
+# refresh (a herdr plugin action) only when the cache is stale.
+repo = os.path.join(SANDBOX, "repos", "api")
+subprocess.run(["git", "init", "-q", "-b", "feat/pay", repo], check=True)
+subprocess.run(["git", "-C", repo, "remote", "add", "origin", "git@github.com:acme/api.git"], check=True)
+api_ws = ws("w4", "api", 4, "api", repo)
+api_ws["worktree"]["repo_root"] = repo
+write(os.path.join(data, "workspace-list.json"), json.dumps({"result": {"workspaces": workspaces + [api_ws]}}))
+prs_file = os.path.join(home, ".local", "state", "herdr", "plugins", "asumaran.asmeta", "prs.json")
+def write_prs(number, state, checked):
+    url = "https://github.com/acme/api/pull/%d" % number
+    write(prs_file, json.dumps({"version": 1, "last_query_started_at": checked, "backoff_until": None,
+        "branches": {"acme/api": {"feat/pay": {"url": url, "checked_at": checked}}},
+        "pulls": {url: {"repo": "acme/api", "number": number, "head": "feat/pay", "base": "main", "state": state,
+                        "title": "PAY-7 take payments", "updated_at": checked, "checked_at": checked}}}))
+fresh = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+write_prs(41, "draft", fresh)
+p = run_plain("-dump")
+check(p.returncode == 0 and any("#41" in l for l in p.stdout.splitlines()), "-dump shows the PR of the shared cache: %r" % p.stdout)
+check(not any("plugin action" in c for c in actions()), "-dump never asks for a refresh: %r" % actions())
+
+write_prs(41, "draft", "2026-01-01T00:00:00Z")
+s = session()
+f = s.start("asgoto ❯")
+check(any("#41" in l for l in rows(f)), "a stale cache still paints first: %r" % rows(f))
+check("plugin action invoke asumaran.asmeta.refresh-prs" in actions(), "a stale cache asks asmeta for a refresh: %r" % actions())
+write_prs(42, "merged", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+time.sleep(1.0)
+f = s.send(b"", 0.4)
+check(any("#42" in l for l in rows(f)) and not any("#41" in l for l in rows(f)), "the open popup repaints when asmeta writes the file: %r" % rows(f))
+s.send(ESC, 0.3)
+check(not os.path.exists(gh_log), "asgoto never runs gh: %r" % (open(gh_log).read() if os.path.exists(gh_log) else ""))
+write(os.path.join(data, "workspace-list.json"), json.dumps({"result": {"workspaces": workspaces}}))
+os.remove(prs_file)
 
 done()
