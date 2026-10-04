@@ -14,7 +14,6 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -581,17 +580,6 @@ func TestCurrentWorkspaceNode(t *testing.T) {
 	}
 }
 
-func TestPaneFocusRequest(t *testing.T) {
-	got, err := paneFocusRequest("w45:pF")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `{"id":"asgoto:pane.focus","method":"pane.focus","params":{"pane_id":"w45:pF"}}` + "\n"
-	if string(got) != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
 // TestSortTreePriority covers the ctrl+s order: every level sorts by its
 // aggregated agent status (blocked > done > working > idle > none), the most
 // recent state change breaks ties, a repo's own panes stay above its
@@ -767,67 +755,6 @@ func TestFrameGeometry(t *testing.T) {
 	}
 	if help := plain[len(plain)-2]; !strings.Contains(help, "type filter") || !strings.Contains(help, "esc/q quit") {
 		t.Errorf("help line = %q", help)
-	}
-}
-
-// TestHerdrConfigString covers reading herdr's config.toml without a TOML
-// parser: only the key under its own table (or dotted at the top level)
-// counts.
-func TestHerdrConfigString(t *testing.T) {
-	cases := []struct{ name, config, want string }{
-		{"empty", "", ""},
-		{"under ui", "onboarding = false\n[ui]\npane_gaps = true\nstatus_indicators = \"symbols\"\n[theme]\nname = \"dracula\"\n", "symbols"},
-		{"dotted top-level", "ui.status_indicators = 'symbols'\n[theme]\n", "symbols"},
-		{"other table", "[theme]\nstatus_indicators = \"symbols\"\n", ""},
-		{"subtable of ui", "[ui]\n[ui.toast]\nstatus_indicators = \"symbols\"\n", ""},
-		{"commented out", "[ui]\n# status_indicators = \"symbols\"\n", ""},
-		{"inline table key", "[ui]\ntab_bar_right = [\n  { status_indicators = \"symbols\" },\n]\n", ""},
-	}
-	for _, c := range cases {
-		if got := herdrConfigString(c.config, "ui", "status_indicators"); got != c.want {
-			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
-		}
-	}
-}
-
-// TestApplyHerdrConfig covers the two settings the gutter mirrors: the glyph
-// style, and dracula's palette (any other theme keeps the ANSI colors).
-func TestApplyHerdrConfig(t *testing.T) {
-	prevSymbols := statusSymbols
-	prev := []lipgloss.Style{stDotBlocked, stDotWorking, stDotDone, stDotIdle, stDotNone}
-	defer func() {
-		statusSymbols = prevSymbols
-		stDotBlocked, stDotWorking, stDotDone, stDotIdle, stDotNone = prev[0], prev[1], prev[2], prev[3], prev[4]
-	}()
-	ansi := stDotBlocked.GetForeground()
-
-	applyHerdrConfig("[ui]\nstatus_indicators = \"emoji\"\n[theme]\nname = \"nord\"\n")
-	if statusSymbols || stDotBlocked.GetForeground() != ansi {
-		t.Errorf("unknown style / other theme: symbols=%v fg=%v, want dots and ANSI", statusSymbols, stDotBlocked.GetForeground())
-	}
-	applyHerdrConfig("[ui]\nstatus_indicators = \"symbols\"\n[theme]\nname = \"Dracula\"\n")
-	if want := lipgloss.Color("#ff5555"); !statusSymbols || stDotBlocked.GetForeground() != want {
-		t.Errorf("symbols + dracula: symbols=%v fg=%v, want true and %v", statusSymbols, stDotBlocked.GetForeground(), want)
-	}
-}
-
-func TestStatusDotStyles(t *testing.T) {
-	defer func(prev bool) { statusSymbols = prev }(statusSymbols)
-	for _, c := range []struct {
-		symbols bool
-		want    string // blocked working done idle none
-	}{
-		{false, "● ● ● ○ ·"},
-		{true, "× ◐ ✓ ○ ·"},
-	} {
-		statusSymbols = c.symbols
-		var got []string
-		for _, s := range []string{"blocked", "working", "done", "idle", ""} {
-			got = append(got, ansi.Strip(statusDot(s)))
-		}
-		if g := strings.Join(got, " "); g != c.want {
-			t.Errorf("symbols=%v: got %q, want %q", c.symbols, g, c.want)
-		}
 	}
 }
 

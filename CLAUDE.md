@@ -137,6 +137,15 @@ Each GitHub Release attaches the `asgoto-<os>-<arch>` assets (macOS and Linux, a
   it with a `flashMsg`, or with a `flashErrMsg` when there is nothing to copy
   or the copy fails; `ASGOTO_CLIPBOARD` replaces the command. The same file in
   every tool of the family.
+- `agentstatus.go`: `statusDot`, `statusRank`, the `stDot*` colors and
+  `loadHerdrConfig`/`applyHerdrConfig`: how an agent status is shown and
+  ranked, mirroring herdr's sidebar and its `ui.status_indicators` and
+  dracula settings. Only presentation and order: `aggregateStatus` stays in
+  `main.go`, because what a parent row sums up is each tool's call. The same
+  file in asagents.
+- `panefocus.go`: `focusPane`: focuses any pane (shell, process or agent)
+  through herdr's socket API (`pane.focus`), which the CLI cannot do for a
+  pane without an agent.
 - `herdr-plugin.toml`: the herdr plugin manifest (id `asumaran.asgoto`): a
   `[[build]]` (runs `scripts/fetch-binary.sh` on install), the `picker` popup
   pane, and the `open` action that opens it (keybind entry point).

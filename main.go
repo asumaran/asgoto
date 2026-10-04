@@ -10,17 +10,14 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -912,24 +909,6 @@ func paneStatus(p paneInfo) string {
 	return p.AgentStatus
 }
 
-// statusRank orders agent statuses when aggregating a workspace's panes,
-// mirroring herdr's workspace_attention_priority: blocked beats done, done beats
-// working, working beats idle, idle beats none/unknown.
-func statusRank(s string) int {
-	switch s {
-	case "blocked":
-		return 4
-	case "done":
-		return 3
-	case "working":
-		return 2
-	case "idle":
-		return 1
-	default: // "unknown", "" (shell / no agent)
-		return 0
-	}
-}
-
 // aggregateStatus sets n.status to the highest-priority status among n and its
 // descendants, so a repo/worktree reflects its panes' state even when panes are
 // hidden. n.seq follows the winning status (the most recent change among the
@@ -1425,13 +1404,6 @@ var (
 	stPRMerged = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))  // purple (ANSI, so it follows the theme)
 	stPRClosed = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
 
-	// Gutter status dots, mirroring herdr's sidebar state_dot.
-	stDotBlocked = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
-	stDotWorking = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // yellow
-	stDotDone    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))  // teal
-	stDotIdle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
-	stDotNone    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // dim
-
 	// Right-aligned column: listening ports on process rows (teal), the git
 	// branch on repo rows, and the folder on worktree rows whose branch moved (dim).
 	stPorts  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow; not pink, so ports never read as a delta
@@ -1444,97 +1416,6 @@ var (
 	stUnstaged  = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
 	stUntracked = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 )
-
-// statusDot renders the 1-rune left-gutter indicator for an aggregated agent
-// status, mirroring herdr's status_icon in both of its styles (see
-// statusSymbols): "dots" (blocked/working/done filled, idle hollow,
-// none/unknown dim) or "symbols" (× ◐ ✓ for the first three).
-func statusDot(s string) string {
-	glyph := func(dot, symbol string) string {
-		if statusSymbols {
-			return symbol
-		}
-		return dot
-	}
-	switch s {
-	case "blocked":
-		return stDotBlocked.Render(glyph("●", "×"))
-	case "working":
-		return stDotWorking.Render(glyph("●", "◐"))
-	case "done":
-		return stDotDone.Render(glyph("●", "✓"))
-	case "idle":
-		return stDotIdle.Render("○")
-	default: // "unknown", "" (shell / no agent)
-		return stDotNone.Render("·")
-	}
-}
-
-// statusSymbols mirrors herdr's `ui.status_indicators = "symbols"`; false is
-// its default, "dots". Set once in main by applyHerdrConfig.
-var statusSymbols bool
-
-// herdrConfigPath resolves herdr's config.toml the way herdr does
-// (config_path in src/config/io.rs): HERDR_CONFIG_PATH, then
-// $XDG_CONFIG_HOME/herdr, then ~/.config/herdr.
-func herdrConfigPath() string {
-	if p := os.Getenv("HERDR_CONFIG_PATH"); p != "" {
-		return p
-	}
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		h, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		base = filepath.Join(h, ".config")
-	}
-	return filepath.Join(base, "herdr", "config.toml")
-}
-
-var (
-	reTomlTable  = regexp.MustCompile(`^\s*\[\s*([^\]]+?)\s*\]\s*(#.*)?$`)
-	reTomlString = regexp.MustCompile(`^\s*([A-Za-z0-9_.\s-]+?)\s*=\s*["']([^"']*)["']`)
-)
-
-// herdrConfigString reads one string value (`table.key`) out of herdr's
-// config.toml. A line scan instead of a TOML dependency: the keys asgoto needs
-// are plain strings, written either under their [table] or as a dotted
-// top-level key. "" when absent.
-func herdrConfigString(config, table, key string) string {
-	current := ""
-	for _, line := range strings.Split(config, "\n") {
-		if m := reTomlTable.FindStringSubmatch(line); m != nil {
-			current = m[1]
-			continue
-		}
-		m := reTomlString.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		name := strings.Join(strings.Fields(m[1]), "")
-		if (current == table && name == key) || (current == "" && name == table+"."+key) {
-			return m[2]
-		}
-	}
-	return ""
-}
-
-// applyHerdrConfig mirrors the two herdr settings the status gutter depends
-// on: `ui.status_indicators` (glyph style; anything but "symbols" is herdr's
-// default, "dots") and `theme.name`. Only dracula's palette is mirrored
-// (Palette::dracula in herdr's src/app/state.rs: red, yellow, teal, green,
-// overlay0); every other theme keeps the terminal's ANSI colors.
-func applyHerdrConfig(config string) {
-	statusSymbols = herdrConfigString(config, "ui", "status_indicators") == "symbols"
-	if strings.ToLower(herdrConfigString(config, "theme", "name")) == "dracula" {
-		stDotBlocked = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff5555"))
-		stDotWorking = lipgloss.NewStyle().Foreground(lipgloss.Color("#f1fa8c"))
-		stDotDone = lipgloss.NewStyle().Foreground(lipgloss.Color("#8be9fd"))
-		stDotIdle = lipgloss.NewStyle().Foreground(lipgloss.Color("#50fa7b"))
-		stDotNone = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272a4"))
-	}
-}
 
 func prStyle(state string) lipgloss.Style {
 	switch state {
@@ -2426,9 +2307,7 @@ func main() {
 	for _, a := range ag.Result.Agents {
 		seqs[a.PaneID] = a.Seq
 	}
-	if data, err := os.ReadFile(herdrConfigPath()); err == nil {
-		applyHerdrConfig(string(data))
-	}
+	loadHerdrConfig()
 	state := loadState()
 	roots := buildTree(ws.Result.Workspaces, pn.Result.Panes, seqs)
 	sortTree(roots, state.PrioritySort)
@@ -2630,60 +2509,4 @@ func dumpLine(n *node, depth int) string {
 		proc = "\t[proc " + portsText(n) + "]"
 	}
 	return fmt.Sprintf("%s%s%s\t(%s %s %s%s)%s", strings.Repeat("  ", depth), prefix, n.label, n.kind, n.status, id, extra, proc)
-}
-
-// focusPane focuses an arbitrary pane (shell, process or agent) through
-// herdr's socket API (`pane.focus`, newline-delimited JSON on
-// HERDR_SOCKET_PATH). The CLI has no equivalent: `pane focus` is
-// direction-only and `agent focus <paneID>` rejects non-agent panes since
-// herdr 0.9 (agent_not_found), which used to leave shell/process rows dead.
-func focusPane(paneID string) error {
-	sock := os.Getenv("HERDR_SOCKET_PATH")
-	if sock == "" {
-		return fmt.Errorf("HERDR_SOCKET_PATH not set")
-	}
-	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(2 * time.Second))
-	req, err := paneFocusRequest(paneID)
-	if err != nil {
-		return err
-	}
-	if _, err := conn.Write(req); err != nil {
-		return err
-	}
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
-	if err != nil {
-		return err
-	}
-	var resp struct {
-		Error *struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(line, &resp); err != nil {
-		return err
-	}
-	if resp.Error != nil {
-		return fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
-	}
-	return nil
-}
-
-// paneFocusRequest encodes one `pane.focus` request line for the socket API.
-func paneFocusRequest(paneID string) ([]byte, error) {
-	req := struct {
-		ID     string            `json:"id"`
-		Method string            `json:"method"`
-		Params map[string]string `json:"params"`
-	}{ID: "asgoto:pane.focus", Method: "pane.focus", Params: map[string]string{"pane_id": paneID}}
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-	return append(data, '\n'), nil
 }
