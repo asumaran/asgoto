@@ -75,6 +75,48 @@ func TestSearchByTicketAndPRNumber(t *testing.T) {
 	}
 }
 
+// TestSearchByHarnessIDs covers the aswork harness IDs: the worker name and
+// the task ref of a space are search text, like the ticket and the PR number.
+func TestSearchByHarnessIDs(t *testing.T) {
+	worker := &node{kind: "worktree", label: "feat-ESHOP-1270", harness: harnessOf(map[string]string{"harness": "es-1270-f", "harness_ref": "ESHOP-1270#F"})}
+	coord := &node{kind: "repo", label: "monorepo-front", harness: harnessOf(map[string]string{"harness": "es-1270", "harness_ref": "ESHOP-1270"})}
+	plain := &node{kind: "worktree", label: "stg-validation"}
+	coord.children = []*node{worker, plain}
+	roots := []*node{coord}
+
+	m := model{roots: roots, ti: textinput.New()}
+	m.allNodes, m.labels, m.branches = flatten(roots)
+	m.refreshMetas()
+
+	matched := func(query string) map[*node]bool {
+		m.ti.SetValue(query)
+		m.applyFilter()
+		out := map[*node]bool{}
+		for _, r := range m.rows {
+			if r.match {
+				out[r.n] = true
+			}
+		}
+		return out
+	}
+
+	if got := matched("es-1270-f"); !got[worker] {
+		t.Errorf("query es-1270-f: matched %v, want the worker's worktree", got)
+	}
+	if got := matched("ESHOP-1270#F"); !got[worker] {
+		t.Errorf("query ESHOP-1270#F: matched %v, want the worker's worktree", got)
+	}
+	if got := matched("es-1270"); !got[coord] {
+		t.Errorf("query es-1270: matched %v, want the coordinator space", got)
+	}
+	if got := matched("es-1270"); got[plain] {
+		t.Errorf("query es-1270: a space without harness tokens matched: %v", got)
+	}
+	if harnessOf(map[string]string{}) != "" {
+		t.Error("no tokens must give no search text")
+	}
+}
+
 // TestSearchByDescription covers the description: it is search text, and the
 // row shows it on a line of its own only when a term matched it and not the
 // label, so an unfiltered tree and a match by name look as they always did.

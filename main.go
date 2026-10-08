@@ -97,6 +97,7 @@ type node struct {
 	branch   string // git branch of the checkout ("" when detached/unknown); shown dim on repo rows, extra search text
 	folder   string // worktree only: checkout folder name (herdr's workspace label); shown dim when it no longer matches the branch, extra search text
 	desc     string // repo/worktree: what the branch is about (the space's "desc" token); extra search text, shown under the row when only it explains a match
+	harness  string // repo/worktree: aswork worker name + task ref (the space's "harness"/"harness_ref" tokens); extra search text
 	checkout string // repo/worktree: path of the checkout, for the async ahead/behind lookup ("" when unknown)
 	cwd      string // pane: its working directory as herdr reports it; repo without worktree metadata: its first pane's ("" when unknown)
 	ahead    int    // commits ahead of the upstream (filled async by deltaMsg)
@@ -124,6 +125,12 @@ type node struct {
 	pids     []int  // pane only: pids of the foreground process group, for the ports lookup
 	ports    []int  // pane only: TCP ports its process tree listens on; right-aligned
 	children []*node
+}
+
+// harnessOf joins a space's aswork harness tokens (asmeta publishes them:
+// worker name and task ref) into one search text; "" outside the harness.
+func harnessOf(t map[string]string) string {
+	return strings.TrimSpace(strings.TrimSpace(t["harness"]) + " " + strings.TrimSpace(t["harness_ref"]))
 }
 
 // ---- persisted UI state ----
@@ -824,6 +831,7 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 			repo.cwd = ps[0].Cwd // what ctrl+y copies when this is no git checkout
 		}
 		repo.desc = main.Tokens["desc"]
+		repo.harness = harnessOf(main.Tokens)
 		if checkout != "" {
 			repo.checkout = checkout
 			repo.branch = gitBranch(checkout)
@@ -865,7 +873,8 @@ func buildTree(wss []wsInfo, panes []paneInfo, seqs map[string]uint64) []*node {
 			// the folder is just the slug of whatever branch it was created
 			// for, and a later checkout leaves it stale (herdr's sidebar
 			// shows the same branch under the folder label).
-			wt := &node{kind: "worktree", label: ws.Label, folder: ws.Label, wsID: ws.ID, desc: ws.Tokens["desc"]}
+			wt := &node{kind: "worktree", label: ws.Label, folder: ws.Label, wsID: ws.ID,
+				desc: ws.Tokens["desc"], harness: harnessOf(ws.Tokens)}
 			if ws.Worktree != nil {
 				wt.checkout = ws.Worktree.CheckoutPath
 				wt.branch = gitBranch(ws.Worktree.CheckoutPath)
@@ -1296,6 +1305,12 @@ func (m *model) refreshMetas() {
 				meta += " "
 			}
 			meta += portsText(n)
+		}
+		if n.harness != "" {
+			if meta != "" {
+				meta += " "
+			}
+			meta += n.harness
 		}
 		m.metas = append(m.metas, meta)
 	}
