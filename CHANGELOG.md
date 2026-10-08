@@ -1,3 +1,9 @@
+## v0.25.0 (2026-10-08)
+
+* feat: search spaces by the harness worker name and task ref (dc1fda2)
+* refactor(shared): extract pane process reading into paneproc.go (8f72b4a)
+* refactor(shared): move agent status and pane focus to shared files (7d85295)
+
 ## v0.24.0 (2026-10-03)
 
 * feat(prs): read pull requests from the shared cache asmeta writes (57666f4)
