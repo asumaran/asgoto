@@ -53,11 +53,14 @@ type sharedBranch struct {
 }
 
 type sharedPRs struct {
-	Version            int                                `json:"version"`
-	LastQueryStartedAt time.Time                          `json:"last_query_started_at"`
-	BackoffUntil       *time.Time                         `json:"backoff_until"`
-	Branches           map[string]map[string]sharedBranch `json:"branches"`
-	Pulls              map[string]sharedPR                `json:"pulls"`
+	Version            int       `json:"version"`
+	LastQueryStartedAt time.Time `json:"last_query_started_at"`
+	// AccountBackoff pauses one account's refreshes after its rate limit
+	// ("" is the group with no mapped account). An old cache with the
+	// former global backoff_until loads with no backoff, once, harmless.
+	AccountBackoff map[string]time.Time               `json:"account_backoff,omitempty"`
+	Branches       map[string]map[string]sharedBranch `json:"branches"`
+	Pulls          map[string]sharedPR                `json:"pulls"`
 }
 
 // sharedPRFile is prs.json in asmeta's state dir, a sibling of this tool's

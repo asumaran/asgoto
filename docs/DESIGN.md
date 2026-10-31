@@ -148,10 +148,12 @@ The one written contract of `prs.json`; `prshare.go` (byte-identical in
 asgoto, asgotoissues, asgotopr and asmeta) is its code, and its test embeds
 the golden example.
 
-- **Writer: asmeta, only.** One GitHub GraphQL query per refresh for every
-  (head repo, branch) of every workspace (up to 100 per query), values passed
-  as variables. A checkout's PRs are looked up in its `upstream` remote when
-  it has one (a fork), else in `origin`; only PRs whose head repo is the
+- **Writer: asmeta, only.** One GitHub GraphQL query per gh account per
+  refresh for every (head repo, branch) of every workspace (up to 100 per
+  query), values passed as variables; the pairs are grouped by the account
+  that sees their org (asmeta's org→account map), each query run with that
+  account's token. A checkout's PRs are looked up in its `upstream` remote
+  when it has one (a fork), else in `origin`; only PRs whose head repo is the
   checkout's origin count; the newest open PR wins, else the newest. Triggers:
   server startup, workspace created / worktree opened / renamed (always),
   focus (only when a branch is missing or checked more than the focus
@@ -159,9 +161,11 @@ the golden example.
   takes `prs.lock` (kernel flock); a request that finds the lock taken waits,
   and if a query started after it was made, uses that answer instead of
   querying again. A repo whose alias fails keeps its entries; a total failure
-  leaves the file alone; a rate limit sets `backoff_until` (5 min, forced
-  refreshes ignore it). The result is merged per entry, never a replacement,
-  so two herdr sessions sharing the state dir never erase each other. After a
+  leaves the file alone; a rate limit pauses only the account it hit, in
+  `account_backoff` (keyed by gh account, `""` = the group with no mapped
+  account; 5 min, forced refreshes ignore it). The result is merged per
+  entry, never a replacement, so two herdr sessions sharing the state dir
+  never erase each other. After a
   refresh asmeta publishes again every workspace whose PR changed.
 - **File:** `<state>/herdr/plugins/asumaran.asmeta/prs.json`, found by a
   reader as the sibling of its own state dir (`sharedPRFile`).
@@ -170,7 +174,7 @@ the golden example.
   {
    "version": 1,
    "last_query_started_at": "2026-10-03T15:20:00Z",
-   "backoff_until": null,
+   "account_backoff": {"<gh account>": "<until>"},
    "branches": {"<head repo>": {"<branch>": {"url": "<PR url or null>", "checked_at": "..."}}},
    "pulls": {"<url>": {"repo": "...", "number": 41, "head": "...", "base": "...",
              "state": "open|draft|merged|closed", "title": "...", "body": "...",
@@ -178,7 +182,8 @@ the golden example.
   }
   ```
 
-  Repo keys lowercased; `url: null` = checked, no PR; a missing branch =
+  `account_backoff` is left out when no account is paused. Repo keys
+  lowercased; `url: null` = checked, no PR; a missing branch =
   never checked; `draft` only while open; entries not checked for 30 days and
   PRs no branch points to are pruned. A file that does not parse or has
   another `version` reads as empty.
