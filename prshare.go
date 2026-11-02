@@ -11,11 +11,15 @@ package main
 // Two maps, so a PR's identity never comes from a branch name alone:
 //
 //	branches[<head repo>][<branch>] = {url, checked_at}   url null: checked, no PR
-//	pulls[<url>]                    = {repo, number, head, base, state, title, body, updated_at, checked_at}
+//	pulls[<url>]                    = {repo, number, head, base, state, review, checks, mergeable, title, body, updated_at, checked_at}
 //
 // The head repo is the checkout's origin, "owner/repo" lowercased; a PR's
 // repo is where it was opened (the upstream of a fork). state is normalized
-// once: open | draft | merged | closed, draft only while open.
+// once: open | draft | merged | closed, draft only while open. review, checks
+// and mergeable are what GitHub says of an open PR, normalized the same way
+// (sharedPRReview, sharedPRChecks, sharedPRMergeable); "" when GitHub says
+// nothing (no review rule, no checks, mergeability not computed yet). A file
+// written before they existed reads with them empty.
 //
 // This file is the same in every tool of the family that shows PRs.
 
@@ -40,7 +44,10 @@ type sharedPR struct {
 	Number    int       `json:"number"`
 	Head      string    `json:"head"`
 	Base      string    `json:"base"`
-	State     string    `json:"state"` // open | draft | merged | closed
+	State     string    `json:"state"`               // open | draft | merged | closed
+	Review    string    `json:"review,omitempty"`    // approved | changes_requested | review_required | ""
+	Checks    string    `json:"checks,omitempty"`    // success | failure | pending | ""
+	Mergeable string    `json:"mergeable,omitempty"` // mergeable | conflicting | ""
 	Title     string    `json:"title"`
 	Body      string    `json:"body,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -136,6 +143,48 @@ func sharedPRState(state string, isDraft bool) string {
 		return "draft"
 	}
 	return "open"
+}
+
+// sharedPRReview normalizes GitHub's reviewDecision: APPROVED,
+// CHANGES_REQUESTED, REVIEW_REQUIRED; anything else (null: the repo has no
+// review rule) is "".
+func sharedPRReview(decision string) string {
+	switch strings.ToUpper(decision) {
+	case "APPROVED":
+		return "approved"
+	case "CHANGES_REQUESTED":
+		return "changes_requested"
+	case "REVIEW_REQUIRED":
+		return "review_required"
+	}
+	return ""
+}
+
+// sharedPRChecks normalizes the statusCheckRollup state of the head commit:
+// SUCCESS; FAILURE and ERROR as failure; PENDING and EXPECTED as pending;
+// "" without checks.
+func sharedPRChecks(rollup string) string {
+	switch strings.ToUpper(rollup) {
+	case "SUCCESS":
+		return "success"
+	case "FAILURE", "ERROR":
+		return "failure"
+	case "PENDING", "EXPECTED":
+		return "pending"
+	}
+	return ""
+}
+
+// sharedPRMergeable normalizes GitHub's mergeable: MERGEABLE, CONFLICTING;
+// UNKNOWN (still computing) is "".
+func sharedPRMergeable(mergeable string) string {
+	switch strings.ToUpper(mergeable) {
+	case "MERGEABLE":
+		return "mergeable"
+	case "CONFLICTING":
+		return "conflicting"
+	}
+	return ""
 }
 
 // prSkipBranch: a branch whose PR is never looked up. A PR with that head is
